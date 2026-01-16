@@ -7,6 +7,7 @@ mod bus;
 mod cli;
 mod config;
 mod id;
+mod oauth;
 mod provider;
 mod session;
 mod storage;

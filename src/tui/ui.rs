@@ -115,11 +115,17 @@ fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &super::theme::
     frame.render_widget(block, dialog_area);
 
     match dialog.dialog_type {
-        DialogType::ModelSelector | DialogType::ProviderSelector => {
+        DialogType::ModelSelector | DialogType::ProviderSelector | DialogType::AuthMethodSelector => {
             render_select_dialog(frame, dialog, theme, inner);
         }
         DialogType::ApiKeyInput => {
             render_input_dialog(frame, dialog, theme, inner);
+        }
+        DialogType::OAuthDeviceCode => {
+            render_device_code_dialog(frame, dialog, theme, inner);
+        }
+        DialogType::OAuthWaiting => {
+            render_waiting_dialog(frame, dialog, theme, inner);
         }
         DialogType::None => {}
     }
@@ -261,6 +267,103 @@ fn render_input_dialog(
         .style(Style::default().fg(theme.dim))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[4]);
+}
+
+/// Render OAuth device code dialog
+fn render_device_code_dialog(
+    frame: &mut Frame,
+    dialog: &DialogState,
+    theme: &super::theme::Theme,
+    area: Rect,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Title/Message
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // URL label
+            Constraint::Length(1), // URL
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Code label
+            Constraint::Length(2), // Code (large)
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    // Message
+    let msg = Paragraph::new("Open your browser and enter the code:")
+        .style(Style::default().fg(theme.foreground))
+        .alignment(Alignment::Center);
+    frame.render_widget(msg, chunks[0]);
+
+    // URL
+    if let Some(uri) = &dialog.verification_uri {
+        let url_label = Paragraph::new("Go to:")
+            .style(Style::default().fg(theme.dim))
+            .alignment(Alignment::Center);
+        frame.render_widget(url_label, chunks[2]);
+
+        let url = Paragraph::new(uri.as_str())
+            .style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+            .alignment(Alignment::Center);
+        frame.render_widget(url, chunks[3]);
+    }
+
+    // User code
+    if let Some(code) = &dialog.user_code {
+        let code_label = Paragraph::new("Enter code:")
+            .style(Style::default().fg(theme.dim))
+            .alignment(Alignment::Center);
+        frame.render_widget(code_label, chunks[5]);
+
+        let code_display = Paragraph::new(code.as_str())
+            .style(
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(Alignment::Center);
+        frame.render_widget(code_display, chunks[6]);
+    }
+
+    // Help text
+    let help = Paragraph::new("Waiting for authorization... (Esc to cancel)")
+        .style(Style::default().fg(theme.dim))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[8]);
+}
+
+/// Render waiting dialog
+fn render_waiting_dialog(
+    frame: &mut Frame,
+    dialog: &DialogState,
+    theme: &super::theme::Theme,
+    area: Rect,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(2), // Message
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    // Message
+    let message = dialog.message.as_deref().unwrap_or("Processing...");
+    let msg = Paragraph::new(message)
+        .style(Style::default().fg(theme.foreground))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    frame.render_widget(msg, chunks[1]);
+
+    // Help text
+    let help = Paragraph::new("Esc: Cancel")
+        .style(Style::default().fg(theme.dim))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[3]);
 }
 
 /// Render messages area

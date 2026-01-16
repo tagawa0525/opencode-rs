@@ -34,6 +34,9 @@ pub enum DialogType {
     ModelSelector,
     ProviderSelector,
     ApiKeyInput,
+    AuthMethodSelector,
+    OAuthDeviceCode,
+    OAuthWaiting,
 }
 
 /// Item for selection dialogs
@@ -56,6 +59,10 @@ pub struct DialogState {
     pub input_value: String,
     pub title: String,
     pub message: Option<String>,
+    /// For OAuth device code flow
+    pub device_code: Option<String>,
+    pub user_code: Option<String>,
+    pub verification_uri: Option<String>,
 }
 
 /// Application state
@@ -140,6 +147,9 @@ impl DialogState {
             input_value: String::new(),
             title: title.to_string(),
             message: None,
+            device_code: None,
+            user_code: None,
+            verification_uri: None,
         }
     }
 
@@ -319,6 +329,99 @@ impl App {
             label: env_var,
             description: None,
             provider_id: Some(provider_id.to_string()),
+        }];
+        self.dialog = Some(dialog);
+    }
+
+    /// Open auth method selector for a provider
+    pub fn open_auth_method_selector(&mut self, provider_id: &str) {
+        let mut items = Vec::new();
+
+        match provider_id {
+            "copilot" => {
+                items.push(SelectItem {
+                    id: "oauth".to_string(),
+                    label: "Sign in with GitHub".to_string(),
+                    description: Some("Use your GitHub Copilot subscription".to_string()),
+                    provider_id: Some(provider_id.to_string()),
+                });
+                items.push(SelectItem {
+                    id: "api_key".to_string(),
+                    label: "Enter token manually".to_string(),
+                    description: Some("Enter GITHUB_COPILOT_TOKEN directly".to_string()),
+                    provider_id: Some(provider_id.to_string()),
+                });
+            }
+            "openai" => {
+                items.push(SelectItem {
+                    id: "oauth".to_string(),
+                    label: "Sign in with ChatGPT".to_string(),
+                    description: Some("Use your ChatGPT Plus/Pro subscription".to_string()),
+                    provider_id: Some(provider_id.to_string()),
+                });
+                items.push(SelectItem {
+                    id: "api_key".to_string(),
+                    label: "Enter API key".to_string(),
+                    description: Some("Enter OPENAI_API_KEY directly".to_string()),
+                    provider_id: Some(provider_id.to_string()),
+                });
+            }
+            _ => {
+                // For other providers, go directly to API key input
+                self.open_api_key_input(provider_id);
+                return;
+            }
+        }
+
+        let provider_name = self
+            .all_providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| provider_id.to_string());
+
+        let dialog = DialogState::new(DialogType::AuthMethodSelector, "Select Auth Method")
+            .with_items(items)
+            .with_message(&format!("How do you want to connect to {}?", provider_name));
+        self.dialog = Some(dialog);
+    }
+
+    /// Start GitHub Copilot OAuth device flow
+    pub fn start_copilot_oauth(&mut self) {
+        let mut dialog = DialogState::new(DialogType::OAuthWaiting, "GitHub Copilot Sign In");
+        dialog.message = Some("Requesting device code...".to_string());
+        dialog.items = vec![SelectItem {
+            id: "copilot".to_string(),
+            label: "copilot".to_string(),
+            description: None,
+            provider_id: Some("copilot".to_string()),
+        }];
+        self.dialog = Some(dialog);
+    }
+
+    /// Update dialog with device code info
+    pub fn show_device_code(&mut self, user_code: &str, verification_uri: &str, device_code: &str) {
+        if let Some(dialog) = &mut self.dialog {
+            dialog.dialog_type = DialogType::OAuthDeviceCode;
+            dialog.user_code = Some(user_code.to_string());
+            dialog.verification_uri = Some(verification_uri.to_string());
+            dialog.device_code = Some(device_code.to_string());
+            dialog.message = Some(format!(
+                "Go to: {}\n\nEnter code: {}",
+                verification_uri, user_code
+            ));
+        }
+    }
+
+    /// Start OpenAI OAuth PKCE flow
+    pub fn start_openai_oauth(&mut self) {
+        let mut dialog = DialogState::new(DialogType::OAuthWaiting, "ChatGPT Sign In");
+        dialog.message = Some("Opening browser for authentication...".to_string());
+        dialog.items = vec![SelectItem {
+            id: "openai".to_string(),
+            label: "openai".to_string(),
+            description: None,
+            provider_id: Some("openai".to_string()),
         }];
         self.dialog = Some(dialog);
     }
@@ -508,6 +611,17 @@ enum AppEvent {
     StreamDone,
     StreamError(String),
     ToolCall(String, String),
+    // OAuth events
+    DeviceCodeReceived {
+        user_code: String,
+        verification_uri: String,
+        device_code: String,
+        interval: u64,
+    },
+    OAuthSuccess {
+        provider_id: String,
+    },
+    OAuthError(String),
 }
 
 /// Main event loop
@@ -531,7 +645,7 @@ async fn run_app(
             if let Event::Key(key) = event::read()? {
                 // Handle dialog input if dialog is open
                 if app.dialog.is_some() {
-                    handle_dialog_input(app, key).await?;
+                    handle_dialog_input(app, key, event_tx.clone()).await?;
                 } else {
                     let action = key_to_action(key);
 
@@ -632,6 +746,31 @@ async fn run_app(
                 AppEvent::ToolCall(name, _args) => {
                     app.append_to_assistant(&format!("\n[Calling tool: {}]\n", name));
                 }
+                AppEvent::DeviceCodeReceived {
+                    user_code,
+                    verification_uri,
+                    device_code,
+                    interval: _,
+                } => {
+                    app.show_device_code(&user_code, &verification_uri, &device_code);
+                    // Try to open browser
+                    let _ = open::that(&verification_uri);
+                }
+                AppEvent::OAuthSuccess { provider_id } => {
+                    // Re-initialize registry to pick up new credentials
+                    let config = Config::load().await?;
+                    provider::registry().initialize(&config).await?;
+                    app.all_providers = provider::registry().list().await;
+                    app.available_providers = provider::registry().list_available().await;
+                    app.close_dialog();
+                    app.add_message("system", &format!("Successfully connected to {}!", provider_id));
+                    app.open_model_selector();
+                }
+                AppEvent::OAuthError(err) => {
+                    if let Some(dialog) = &mut app.dialog {
+                        dialog.message = Some(format!("Error: {}", err));
+                    }
+                }
             }
         }
 
@@ -650,7 +789,11 @@ async fn run_app(
 }
 
 /// Handle input when a dialog is open
-async fn handle_dialog_input(app: &mut App, key: crossterm::event::KeyEvent) -> Result<()> {
+async fn handle_dialog_input(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    event_tx: mpsc::Sender<AppEvent>,
+) -> Result<()> {
     let dialog_type = app.dialog.as_ref().map(|d| d.dialog_type.clone());
 
     match dialog_type {
@@ -697,8 +840,8 @@ async fn handle_dialog_input(app: &mut App, key: crossterm::event::KeyEvent) -> 
                                         app.close_dialog();
                                         app.open_model_selector();
                                     } else {
-                                        // Need API key
-                                        app.open_api_key_input(&provider_id);
+                                        // Show auth method selector for providers with OAuth
+                                        app.open_auth_method_selector(&provider_id);
                                     }
                                 }
                                 _ => {}
@@ -790,6 +933,69 @@ async fn handle_dialog_input(app: &mut App, key: crossterm::event::KeyEvent) -> 
                 _ => {}
             }
         }
+        Some(DialogType::AuthMethodSelector) => {
+            match key.code {
+                KeyCode::Esc => {
+                    app.open_provider_selector();
+                }
+                KeyCode::Enter => {
+                    if let Some(dialog) = &app.dialog {
+                        if let Some(item) = dialog.selected_item() {
+                            let auth_method = item.id.clone();
+                            let provider_id = item
+                                .provider_id
+                                .clone()
+                                .unwrap_or_default();
+
+                            match auth_method.as_str() {
+                                "oauth" => {
+                                    match provider_id.as_str() {
+                                        "copilot" => {
+                                            app.start_copilot_oauth();
+                                            // Start OAuth flow in background
+                                            let tx = event_tx.clone();
+                                            tokio::spawn(async move {
+                                                start_copilot_oauth_flow(tx).await;
+                                            });
+                                        }
+                                        "openai" => {
+                                            app.start_openai_oauth();
+                                            // Start OAuth flow in background
+                                            let tx = event_tx.clone();
+                                            tokio::spawn(async move {
+                                                start_openai_oauth_flow(tx).await;
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                "api_key" => {
+                                    app.open_api_key_input(&provider_id);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                KeyCode::Up => {
+                    if let Some(dialog) = &mut app.dialog {
+                        dialog.move_up();
+                    }
+                }
+                KeyCode::Down => {
+                    if let Some(dialog) = &mut app.dialog {
+                        dialog.move_down();
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(DialogType::OAuthDeviceCode) | Some(DialogType::OAuthWaiting) => {
+            // Only allow Esc to cancel
+            if key.code == KeyCode::Esc {
+                app.open_provider_selector();
+            }
+        }
         _ => {
             if key.code == KeyCode::Esc {
                 app.close_dialog();
@@ -879,5 +1085,132 @@ async fn stream_response(
                 .await
         }
         _ => Err(anyhow::anyhow!("Unsupported provider: {}", provider_id)),
+    }
+}
+
+/// Start GitHub Copilot OAuth device flow
+async fn start_copilot_oauth_flow(tx: mpsc::Sender<AppEvent>) {
+    use crate::oauth;
+
+    // Request device code
+    match oauth::copilot_request_device_code().await {
+        Ok(device_code_response) => {
+            // Send device code to UI
+            let _ = tx
+                .send(AppEvent::DeviceCodeReceived {
+                    user_code: device_code_response.user_code.clone(),
+                    verification_uri: device_code_response.verification_uri.clone(),
+                    device_code: device_code_response.device_code.clone(),
+                    interval: device_code_response.interval,
+                })
+                .await;
+
+            // Poll for token
+            match oauth::copilot_poll_for_token(
+                &device_code_response.device_code,
+                device_code_response.interval,
+            )
+            .await
+            {
+                Ok(access_token) => {
+                    // Save token
+                    let token_info = oauth::OAuthTokenInfo::new_copilot(access_token.clone());
+                    if let Err(e) = crate::auth::save_oauth_token("copilot", token_info).await {
+                        let _ = tx
+                            .send(AppEvent::OAuthError(format!("Failed to save token: {}", e)))
+                            .await;
+                        return;
+                    }
+
+                    // Also set environment variable for current session
+                    std::env::set_var("GITHUB_COPILOT_TOKEN", &access_token);
+
+                    let _ = tx
+                        .send(AppEvent::OAuthSuccess {
+                            provider_id: "copilot".to_string(),
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::OAuthError(e.to_string())).await;
+                }
+            }
+        }
+        Err(e) => {
+            let _ = tx.send(AppEvent::OAuthError(e.to_string())).await;
+        }
+    }
+}
+
+/// Start OpenAI OAuth PKCE flow
+async fn start_openai_oauth_flow(tx: mpsc::Sender<AppEvent>) {
+    use crate::oauth;
+
+    // Generate PKCE codes and state
+    let pkce = oauth::generate_pkce();
+    let state = oauth::generate_state();
+    let redirect_uri = oauth::get_oauth_redirect_uri();
+
+    // Start callback server
+    let callback_rx = match oauth::start_oauth_callback_server(state.clone()).await {
+        Ok(rx) => rx,
+        Err(e) => {
+            let _ = tx
+                .send(AppEvent::OAuthError(format!(
+                    "Failed to start callback server: {}",
+                    e
+                )))
+                .await;
+            return;
+        }
+    };
+
+    // Build and open auth URL
+    let auth_url = oauth::build_openai_auth_url(&redirect_uri, &pkce, &state);
+    if let Err(e) = open::that(&auth_url) {
+        let _ = tx
+            .send(AppEvent::OAuthError(format!(
+                "Failed to open browser: {}",
+                e
+            )))
+            .await;
+        return;
+    }
+
+    // Wait for callback with authorization code
+    match callback_rx.await {
+        Ok(code) => {
+            // Exchange code for tokens
+            match oauth::openai_exchange_code(&code, &redirect_uri, &pkce).await {
+                Ok(tokens) => {
+                    // Save tokens
+                    let token_info = oauth::OAuthTokenInfo::new_openai(tokens);
+                    if let Err(e) = crate::auth::save_oauth_token("openai", token_info.clone()).await
+                    {
+                        let _ = tx
+                            .send(AppEvent::OAuthError(format!("Failed to save tokens: {}", e)))
+                            .await;
+                        return;
+                    }
+
+                    // Set environment variable for current session
+                    std::env::set_var("OPENAI_API_KEY", &token_info.access);
+
+                    let _ = tx
+                        .send(AppEvent::OAuthSuccess {
+                            provider_id: "openai".to_string(),
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::OAuthError(e.to_string())).await;
+                }
+            }
+        }
+        Err(_) => {
+            let _ = tx
+                .send(AppEvent::OAuthError("OAuth callback failed".to_string()))
+                .await;
+        }
     }
 }

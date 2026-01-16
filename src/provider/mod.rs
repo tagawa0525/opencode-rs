@@ -214,10 +214,21 @@ impl ProviderRegistry {
 
         // Load saved API keys from auth storage
         if let Ok(auth) = crate::auth::AuthStorage::load().await {
+            // Load API keys
             for (provider_id, api_key) in &auth.api_keys {
                 if let Some(provider) = providers.get_mut(provider_id) {
                     if provider.key.is_none() {
                         provider.key = Some(api_key.clone());
+                        provider.source = ProviderSource::Config;
+                    }
+                }
+            }
+
+            // Load OAuth tokens
+            for (provider_id, token_info) in &auth.oauth_tokens {
+                if let Some(provider) = providers.get_mut(provider_id) {
+                    if provider.key.is_none() && !token_info.is_expired() {
+                        provider.key = Some(token_info.access.clone());
                         provider.source = ProviderSource::Config;
                     }
                 }

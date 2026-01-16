@@ -81,6 +81,13 @@ syntect = "5.2"
 # Random number generation
 rand = "0.8"
 
+# Cryptography (for PKCE)
+sha2 = "0.10"
+base64 = "0.22"
+
+# URL encoding
+urlencoding = "2.1"
+
 # Lazy static initialization
 lazy_static = "1.5"
 
@@ -95,6 +102,9 @@ tempfile = "3.15"
 
 # TTY detection
 atty = "0.2"
+
+# Open URLs in browser
+open = "5.3"
 
 [dev-dependencies]
 tokio-test = "0.4"

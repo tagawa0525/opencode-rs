@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
+use crate::oauth::OAuthTokenInfo;
+
 /// Authentication storage structure
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthStorage {
@@ -16,12 +18,12 @@ pub struct AuthStorage {
     #[serde(default)]
     pub api_keys: HashMap<String, String>,
 
-    /// OAuth tokens by provider ID (for future use)
+    /// OAuth tokens by provider ID
     #[serde(default)]
-    pub tokens: HashMap<String, OAuthToken>,
+    pub oauth_tokens: HashMap<String, OAuthTokenInfo>,
 }
 
-/// OAuth token structure (for future use)
+/// OAuth token structure (legacy, kept for compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthToken {
     pub access_token: String,
@@ -89,6 +91,21 @@ impl AuthStorage {
     pub fn remove_api_key(&mut self, provider_id: &str) {
         self.api_keys.remove(provider_id);
     }
+
+    /// Get OAuth token for a provider
+    pub fn get_oauth_token(&self, provider_id: &str) -> Option<&OAuthTokenInfo> {
+        self.oauth_tokens.get(provider_id)
+    }
+
+    /// Set OAuth token for a provider
+    pub fn set_oauth_token(&mut self, provider_id: &str, token: OAuthTokenInfo) {
+        self.oauth_tokens.insert(provider_id.to_string(), token);
+    }
+
+    /// Remove OAuth token for a provider
+    pub fn remove_oauth_token(&mut self, provider_id: &str) {
+        self.oauth_tokens.remove(provider_id);
+    }
 }
 
 /// Save an API key for a provider
@@ -138,4 +155,26 @@ pub async fn load_saved_keys_to_env() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Save OAuth token for a provider
+pub async fn save_oauth_token(provider_id: &str, token: OAuthTokenInfo) -> Result<()> {
+    let mut storage = AuthStorage::load().await.unwrap_or_default();
+    storage.set_oauth_token(provider_id, token);
+    storage.save().await
+}
+
+/// Load OAuth token for a provider
+pub async fn load_oauth_token(provider_id: &str) -> Option<OAuthTokenInfo> {
+    AuthStorage::load()
+        .await
+        .ok()
+        .and_then(|s| s.get_oauth_token(provider_id).cloned())
+}
+
+/// Remove OAuth token for a provider
+pub async fn remove_oauth_token(provider_id: &str) -> Result<()> {
+    let mut storage = AuthStorage::load().await.unwrap_or_default();
+    storage.remove_oauth_token(provider_id);
+    storage.save().await
 }
