@@ -94,8 +94,8 @@ pub fn render(frame: &mut Frame, app: &App) {
 /// Render a dialog overlay
 fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &super::theme::Theme, area: Rect) {
     // Calculate dialog size
-    let width = area.width.min(60).max(40);
-    let height = area.height.min(20).max(10);
+    let width = area.width.clamp(40, 60);
+    let height = area.height.clamp(10, 20);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
 
