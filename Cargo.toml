@@ -1,6 +1,107 @@
 [package]
 name = "opencode"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "AI-powered development tool - Rust implementation"
+license = "MIT"
+authors = ["Opencode Team"]
+repository = "https://github.com/anomalyco/opencode"
+
+[[bin]]
+name = "opencode"
+path = "src/main.rs"
 
 [dependencies]
+# Async runtime
+tokio = { version = "1.45", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# TUI
+ratatui = { version = "0.29", features = ["all-widgets"] }
+crossterm = "0.29"
+tui-textarea = "0.7"
+
+# HTTP client for LLM APIs
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest-eventsource = "0.6"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID/ID generation
+ulid = "1.1"
+uuid = { version = "1.16", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# File system utilities
+dirs = "6.0"
+glob = "0.3"
+ignore = "0.4"
+walkdir = "2.5"
+notify = "8.0"
+
+# Config parsing
+jsonc-parser = "0.24"
+
+# String utilities
+slugify = "0.1"
+regex = "1.11"
+similar = "2.7"  # for diffs
+
+# Async channels
+async-channel = "2.3"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Shell/Process
+which = "7.0"
+
+# Terminal colors
+owo-colors = "4.1"
+
+# Syntax highlighting
+syntect = "5.2"
+
+# Random number generation
+rand = "0.8"
+
+# Lazy static initialization
+lazy_static = "1.5"
+
+# MIME type detection
+mime_guess = "2.0"
+
+# Markdown parsing
+pulldown-cmark = "0.13"
+
+# Temp files
+tempfile = "3.15"
+
+[dev-dependencies]
+tokio-test = "0.4"
+pretty_assertions = "1.4"
+
+[lints.rust]
+dead_code = "allow"
+unused_imports = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
