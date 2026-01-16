@@ -574,6 +574,64 @@ impl Config {
             .or_else(|| std::env::var("USERNAME").ok())
             .unwrap_or_else(|| "user".to_string())
     }
+
+    /// Create a default config file if it doesn't exist
+    pub async fn init() -> Result<PathBuf> {
+        let config_dir = Self::global_config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        
+        // Create config directory if it doesn't exist
+        fs::create_dir_all(&config_dir).await
+            .context("Failed to create config directory")?;
+
+        let config_path = config_dir.join("opencode.json");
+
+        if !config_path.exists() {
+            // Create default config
+            let default_config = Config {
+                schema: Some("https://opencode.ai/schema/config.json".to_string()),
+                theme: Some("dark".to_string()),
+                model: None, // User needs to configure this
+                small_model: None,
+                default_agent: None,
+                username: None,
+                log_level: Some("info".to_string()),
+                disabled_providers: None,
+                enabled_providers: None,
+                share: Some(ShareMode::Disabled),
+                autoupdate: Some(AutoUpdate::Notify("notify".to_string())),
+                provider: Some(HashMap::new()),
+                mcp: None,
+                agent: None,
+                command: None,
+                permission: None,
+                keybinds: None,
+                tui: Some(TuiConfig {
+                    scroll_speed: Some(3.0),
+                    diff_style: Some(DiffStyle::Auto),
+                }),
+                server: Some(ServerConfig {
+                    port: Some(19876),
+                    hostname: Some("127.0.0.1".to_string()),
+                    mdns: Some(false),
+                    cors: None,
+                }),
+                compaction: Some(CompactionConfig {
+                    auto: Some(true),
+                    prune: Some(false),
+                }),
+                experimental: None,
+                instructions: None,
+                plugin: None,
+            };
+
+            let content = serde_json::to_string_pretty(&default_config)?;
+            fs::write(&config_path, content).await
+                .context("Failed to write default config file")?;
+        }
+
+        Ok(config_path)
+    }
 }
 
 #[cfg(test)]

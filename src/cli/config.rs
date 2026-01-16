@@ -48,3 +48,25 @@ pub async fn path() -> Result<()> {
 
     Ok(())
 }
+
+/// Initialize configuration file with defaults
+pub async fn init() -> Result<()> {
+    let config_path = Config::init().await?;
+    println!("Created default configuration file at: {}", config_path.display());
+    println!("\nPlease edit this file to add your API keys.");
+    println!("Example provider configuration:");
+    println!(r#"
+{{
+  "provider": {{
+    "anthropic": {{
+      "key": "$ANTHROPIC_API_KEY"
+    }},
+    "openai": {{
+      "key": "$OPENAI_API_KEY"
+    }}
+  }},
+  "model": "anthropic/claude-3-5-sonnet-20241022"
+}}
+"#);
+    Ok(())
+}

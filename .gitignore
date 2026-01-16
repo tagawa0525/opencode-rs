@@ -1,1 +1,24 @@
+# Rust build artifacts
 /target
+*.rs.bk
+Cargo.lock
+
+# IDE
+.DS_Store
+.idea
+.vscode
+Session.vim
+
+# Local config
+opencode.json
+.env
+.opencode
+
+# Temporary files
+tmp/
+logs/
+*~
+a.out
+
+# Development
+opencode-dev

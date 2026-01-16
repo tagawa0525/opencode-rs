@@ -226,6 +226,15 @@ impl App {
 
 /// Run the TUI application
 pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Result<()> {
+    // Check if we're running in a TTY
+    if !atty::is(atty::Stream::Stdout) {
+        anyhow::bail!(
+            "This command requires a TTY (terminal). Please run in an interactive terminal,\n\
+            or use the 'prompt' command instead for non-interactive usage:\n  \
+            opencode prompt \"your message here\""
+        );
+    }
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();

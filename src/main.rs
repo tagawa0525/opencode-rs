@@ -107,6 +107,8 @@ enum ConfigCommands {
     Show,
     /// Show configuration file path
     Path,
+    /// Initialize configuration file with defaults
+    Init,
 }
 
 #[tokio::main]
@@ -161,6 +163,9 @@ async fn main() -> Result<()> {
             }
             ConfigCommands::Path => {
                 cli::config::path().await?;
+            }
+            ConfigCommands::Init => {
+                cli::config::init().await?;
             }
         },
         Some(Commands::Version) => {
