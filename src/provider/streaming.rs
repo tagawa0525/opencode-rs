@@ -285,6 +285,101 @@ impl StreamingClient {
 
         Ok(rx)
     }
+
+    /// Stream from GitHub Copilot API (OpenAI-compatible)
+    pub async fn stream_copilot(
+        &self,
+        token: &str,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolDefinition>,
+        max_tokens: u64,
+    ) -> Result<mpsc::Receiver<StreamEvent>> {
+        let (tx, rx) = mpsc::channel(100);
+
+        let openai_tools: Vec<_> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })
+            })
+            .collect();
+
+        let request_body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "tools": openai_tools,
+            "stream": true,
+        });
+
+        let client = self.client.clone();
+        let token = token.to_string();
+
+        tokio::spawn(async move {
+            let result = client
+                .post("https://api.githubcopilot.com/chat/completions")
+                .header("Authorization", format!("Bearer {}", token))
+                .header("content-type", "application/json")
+                .header("editor-version", "opencode/0.1.0")
+                .header("copilot-integration-id", "vscode-chat")
+                .json(&request_body)
+                .send()
+                .await;
+
+            match result {
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        let error = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        let _ = tx.send(StreamEvent::Error(error)).await;
+                        return;
+                    }
+
+                    let mut bytes = response.bytes_stream();
+                    use futures::StreamExt;
+
+                    let mut buffer = String::new();
+
+                    while let Some(chunk) = bytes.next().await {
+                        match chunk {
+                            Ok(bytes) => {
+                                buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                                while let Some(pos) = buffer.find('\n') {
+                                    let line = buffer[..pos].to_string();
+                                    buffer = buffer[pos + 1..].to_string();
+
+                                    if let Some(stream_event) = parse_openai_sse(&line) {
+                                        if tx.send(stream_event).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                                return;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                }
+            }
+        });
+
+        Ok(rx)
+    }
 }
 
 impl Default for StreamingClient {

@@ -867,6 +867,17 @@ async fn stream_response(
                 )
                 .await
         }
+        "copilot" => {
+            client
+                .stream_copilot(
+                    &api_key,
+                    &model.api.id,
+                    messages,
+                    tool_defs,
+                    model.limit.output,
+                )
+                .await
+        }
         _ => Err(anyhow::anyhow!("Unsupported provider: {}", provider_id)),
     }
 }

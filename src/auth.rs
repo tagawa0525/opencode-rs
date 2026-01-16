@@ -123,6 +123,7 @@ pub async fn load_saved_keys_to_env() -> Result<()> {
         ("openai", "OPENAI_API_KEY"),
         ("google", "GOOGLE_API_KEY"),
         ("gemini", "GEMINI_API_KEY"),
+        ("copilot", "GITHUB_COPILOT_TOKEN"),
     ]
     .into_iter()
     .collect();
