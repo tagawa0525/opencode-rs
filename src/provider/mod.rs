@@ -212,7 +212,19 @@ impl ProviderRegistry {
             }
         }
 
-        // Check for API keys in environment
+        // Load saved API keys from auth storage
+        if let Ok(auth) = crate::auth::AuthStorage::load().await {
+            for (provider_id, api_key) in &auth.api_keys {
+                if let Some(provider) = providers.get_mut(provider_id) {
+                    if provider.key.is_none() {
+                        provider.key = Some(api_key.clone());
+                        provider.source = ProviderSource::Config;
+                    }
+                }
+            }
+        }
+
+        // Check for API keys in environment (overrides saved keys)
         for provider in providers.values_mut() {
             for env_var in &provider.env {
                 if let Ok(key) = std::env::var(env_var) {
