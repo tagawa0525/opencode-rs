@@ -272,8 +272,7 @@ impl App {
             return;
         }
 
-        let dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-            .with_items(items);
+        let dialog = DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
         self.dialog = Some(dialog);
     }
 
@@ -576,17 +575,22 @@ async fn run_app(
                                         while let Some(event) = rx.recv().await {
                                             match event {
                                                 StreamEvent::TextDelta(text) => {
-                                                    let _ = tx.send(AppEvent::StreamDelta(text)).await;
+                                                    let _ =
+                                                        tx.send(AppEvent::StreamDelta(text)).await;
                                                 }
                                                 StreamEvent::Done { .. } => {
                                                     let _ = tx.send(AppEvent::StreamDone).await;
                                                 }
                                                 StreamEvent::Error(err) => {
-                                                    let _ = tx.send(AppEvent::StreamError(err)).await;
+                                                    let _ =
+                                                        tx.send(AppEvent::StreamError(err)).await;
                                                 }
                                                 StreamEvent::ToolCallStart { name, .. } => {
                                                     let _ = tx
-                                                        .send(AppEvent::ToolCall(name, String::new()))
+                                                        .send(AppEvent::ToolCall(
+                                                            name,
+                                                            String::new(),
+                                                        ))
                                                         .await;
                                                 }
                                                 _ => {}
@@ -654,7 +658,10 @@ async fn handle_dialog_input(app: &mut App, key: crossterm::event::KeyEvent) -> 
             match key.code {
                 KeyCode::Esc => {
                     // Close dialog, but if model not configured, quit
-                    if !app.model_configured && app.dialog.as_ref().map(|d| &d.dialog_type) == Some(&DialogType::ModelSelector) {
+                    if !app.model_configured
+                        && app.dialog.as_ref().map(|d| &d.dialog_type)
+                            == Some(&DialogType::ModelSelector)
+                    {
                         app.should_quit = true;
                     }
                     app.close_dialog();

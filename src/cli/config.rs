@@ -52,10 +52,14 @@ pub async fn path() -> Result<()> {
 /// Initialize configuration file with defaults
 pub async fn init() -> Result<()> {
     let config_path = Config::init().await?;
-    println!("Created default configuration file at: {}", config_path.display());
+    println!(
+        "Created default configuration file at: {}",
+        config_path.display()
+    );
     println!("\nPlease edit this file to add your API keys.");
     println!("Example provider configuration:");
-    println!(r#"
+    println!(
+        r#"
 {{
   "provider": {{
     "anthropic": {{
@@ -67,6 +71,7 @@ pub async fn init() -> Result<()> {
   }},
   "model": "anthropic/claude-3-5-sonnet-20241022"
 }}
-"#);
+"#
+    );
     Ok(())
 }

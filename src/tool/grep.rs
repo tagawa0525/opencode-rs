@@ -1,8 +1,8 @@
 //! Grep tool for searching file contents.
 
 use super::*;
-use anyhow::Result;
 use ::glob::Pattern;
+use anyhow::Result;
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::{json, Value};
@@ -72,8 +72,7 @@ impl Tool for GrepTool {
             .map_err(|e| anyhow::anyhow!("Invalid regex pattern '{}': {}", pattern, e))?;
 
         // Build glob matcher for include pattern
-        let include_glob: Option<Pattern> = include_pattern
-            .and_then(|p| Pattern::new(p).ok());
+        let include_glob: Option<Pattern> = include_pattern.and_then(|p| Pattern::new(p).ok());
 
         // Walk directory respecting .gitignore
         let walker = WalkBuilder::new(&search_path)

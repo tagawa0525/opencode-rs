@@ -378,9 +378,12 @@ fn parse_anthropic_sse(event: &str) -> Option<StreamEvent> {
             }
 
             let delta = parsed.get("delta")?;
-            delta.get("stop_reason").and_then(|v| v.as_str()).map(|stop_reason| StreamEvent::Done {
-                finish_reason: stop_reason.to_string(),
-            })
+            delta
+                .get("stop_reason")
+                .and_then(|v| v.as_str())
+                .map(|stop_reason| StreamEvent::Done {
+                    finish_reason: stop_reason.to_string(),
+                })
         }
         "message_stop" => Some(StreamEvent::Done {
             finish_reason: "stop".to_string(),

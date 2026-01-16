@@ -602,9 +602,10 @@ impl Config {
     pub async fn init() -> Result<PathBuf> {
         let config_dir = Self::global_config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-        
+
         // Create config directory if it doesn't exist
-        fs::create_dir_all(&config_dir).await
+        fs::create_dir_all(&config_dir)
+            .await
             .context("Failed to create config directory")?;
 
         let config_path = config_dir.join("opencode.json");
@@ -650,7 +651,8 @@ impl Config {
             };
 
             let content = serde_json::to_string_pretty(&default_config)?;
-            fs::write(&config_path, content).await
+            fs::write(&config_path, content)
+                .await
                 .context("Failed to write default config file")?;
         }
 
@@ -719,7 +721,7 @@ mod tests {
         let result = Config::strip_trailing_commas(input);
         assert!(!result.contains(",}"));
         assert!(!result.contains(",]"));
-        
+
         // Should be valid JSON after stripping
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(&result);
         assert!(parsed.is_ok());
@@ -729,7 +731,7 @@ mod tests {
     fn test_empty_config() {
         let empty_content = "";
         let whitespace_content = "   \n  \t  ";
-        
+
         // These should not panic and should return default config
         assert!(empty_content.trim().is_empty());
         assert!(whitespace_content.trim().is_empty());

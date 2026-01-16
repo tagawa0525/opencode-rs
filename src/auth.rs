@@ -81,7 +81,8 @@ impl AuthStorage {
 
     /// Set API key for a provider
     pub fn set_api_key(&mut self, provider_id: &str, api_key: &str) {
-        self.api_keys.insert(provider_id.to_string(), api_key.to_string());
+        self.api_keys
+            .insert(provider_id.to_string(), api_key.to_string());
     }
 
     /// Remove API key for a provider

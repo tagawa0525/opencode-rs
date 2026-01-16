@@ -145,8 +145,7 @@ fn render_select_dialog(
 
     // Message
     if let Some(message) = &dialog.message {
-        let msg = Paragraph::new(message.as_str())
-            .style(Style::default().fg(theme.dim));
+        let msg = Paragraph::new(message.as_str()).style(Style::default().fg(theme.dim));
         frame.render_widget(msg, chunks[0]);
     }
 

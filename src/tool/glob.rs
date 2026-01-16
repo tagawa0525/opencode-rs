@@ -1,8 +1,8 @@
 //! Glob tool for finding files by pattern.
 
 use super::*;
-use anyhow::Result;
 use ::glob::glob as glob_match;
+use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::Path;
 
