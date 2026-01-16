@@ -105,6 +105,10 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<Vec<String>>,
 
+    /// Tool configurations (enable/disable tools)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<HashMap<String, bool>>,
+
     /// Experimental features
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalConfig>,
@@ -380,8 +384,16 @@ impl Config {
             .await
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
+        // Handle empty or whitespace-only files
+        if content.trim().is_empty() {
+            return Ok(Some(Config::default()));
+        }
+
         // Handle JSONC (JSON with comments)
         let content = Self::strip_jsonc_comments(&content);
+
+        // Strip trailing commas
+        let content = Self::strip_trailing_commas(&content);
 
         // Handle environment variable substitution
         let content = Self::substitute_env_vars(&content);
@@ -458,6 +470,13 @@ impl Config {
         }
 
         result
+    }
+
+    /// Strip trailing commas from JSON (common in JSONC)
+    fn strip_trailing_commas(content: &str) -> String {
+        // Remove trailing commas before closing braces or brackets
+        let re = regex::Regex::new(r",(\s*[}\]])").unwrap();
+        re.replace_all(content, "$1").to_string()
     }
 
     /// Substitute environment variables in the format {env:VAR_NAME}
@@ -545,6 +564,10 @@ impl Config {
         if other.plugin.is_some() {
             self.plugin = other.plugin;
         }
+        if let Some(other_tools) = other.tools {
+            let tools = self.tools.get_or_insert_with(HashMap::new);
+            tools.extend(other_tools);
+        }
         if other.experimental.is_some() {
             self.experimental = other.experimental;
         }
@@ -623,6 +646,7 @@ impl Config {
                 experimental: None,
                 instructions: None,
                 plugin: None,
+                tools: None,
             };
 
             let content = serde_json::to_string_pretty(&default_config)?;
@@ -680,5 +704,34 @@ mod tests {
         assert_eq!(merged.theme, Some("light".to_string()));
         assert_eq!(merged.model, Some("anthropic/claude".to_string()));
         assert_eq!(merged.username, Some("test_user".to_string()));
+    }
+
+    #[test]
+    fn test_strip_trailing_commas() {
+        let input = r#"{
+            "key": "value",
+            "nested": {
+                "foo": "bar",
+            },
+            "array": [1, 2, 3,],
+        }"#;
+
+        let result = Config::strip_trailing_commas(input);
+        assert!(!result.contains(",}"));
+        assert!(!result.contains(",]"));
+        
+        // Should be valid JSON after stripping
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&result);
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_empty_config() {
+        let empty_content = "";
+        let whitespace_content = "   \n  \t  ";
+        
+        // These should not panic and should return default config
+        assert!(empty_content.trim().is_empty());
+        assert!(whitespace_content.trim().is_empty());
     }
 }
