@@ -14,6 +14,12 @@ use tokio::sync::mpsc;
 use super::input::{key_to_action, Action};
 use super::theme::Theme;
 use super::ui;
+
+// Re-export types for backward compatibility
+pub use super::types::{
+    AutocompleteState, CommandItem, DialogState, DialogType, DisplayMessage, MessagePart,
+    PermissionRequest, SelectItem,
+};
 use crate::config::Config;
 use crate::provider::{self, Model, Provider, StreamEvent};
 use crate::session::{CreateSessionOptions, Session};
@@ -22,132 +28,6 @@ use crate::slash_command::{
     CommandAction, CommandContext, CommandOutput,
 };
 use crate::tool;
-
-/// Display message in the UI
-#[derive(Debug, Clone)]
-pub struct DisplayMessage {
-    pub role: String,
-    pub content: String,
-    pub time_created: i64,
-    pub parts: Vec<MessagePart>,
-}
-
-/// Message part - can be text, tool call, or tool result
-#[derive(Debug, Clone)]
-pub enum MessagePart {
-    Text {
-        text: String,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        args: String,
-    },
-    ToolResult {
-        id: String,
-        output: String,
-        is_error: bool,
-    },
-}
-
-/// Active dialog type
-#[derive(Debug, Clone, PartialEq)]
-pub enum DialogType {
-    None,
-    ModelSelector,
-    ProviderSelector,
-    ApiKeyInput,
-    AuthMethodSelector,
-    OAuthDeviceCode,
-    OAuthWaiting,
-    PermissionRequest,
-}
-
-/// Autocomplete state for slash commands
-#[derive(Debug, Clone)]
-pub struct AutocompleteState {
-    /// Available commands to choose from
-    pub items: Vec<CommandItem>,
-    /// Currently selected index
-    pub selected_index: usize,
-    /// The filter text (after the /)
-    pub filter: String,
-}
-
-/// Item in autocomplete list
-#[derive(Debug, Clone)]
-pub struct CommandItem {
-    pub name: String,
-    pub description: String,
-    pub display: String,
-}
-
-impl AutocompleteState {
-    pub fn new(items: Vec<CommandItem>) -> Self {
-        Self {
-            items,
-            selected_index: 0,
-            filter: String::new(),
-        }
-    }
-
-    pub fn move_up(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-        } else {
-            self.selected_index = self.items.len().saturating_sub(1);
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        if self.selected_index + 1 < self.items.len() {
-            self.selected_index += 1;
-        } else {
-            self.selected_index = 0;
-        }
-    }
-
-    pub fn selected_item(&self) -> Option<&CommandItem> {
-        self.items.get(self.selected_index)
-    }
-}
-
-/// Item for selection dialogs
-#[derive(Debug, Clone)]
-pub struct SelectItem {
-    pub id: String,
-    pub label: String,
-    pub description: Option<String>,
-    pub provider_id: Option<String>,
-}
-
-/// Permission request for tool execution
-#[derive(Debug, Clone)]
-pub struct PermissionRequest {
-    pub id: String,
-    pub tool_name: String,
-    pub arguments: String,
-    pub description: String,
-}
-
-/// Dialog state for selection dialogs
-#[derive(Debug, Clone)]
-pub struct DialogState {
-    pub dialog_type: DialogType,
-    pub items: Vec<SelectItem>,
-    pub selected_index: usize,
-    pub search_query: String,
-    pub filtered_indices: Vec<usize>,
-    pub input_value: String,
-    pub title: String,
-    pub message: Option<String>,
-    /// For OAuth device code flow
-    pub device_code: Option<String>,
-    pub user_code: Option<String>,
-    pub verification_uri: Option<String>,
-    /// For permission requests
-    pub permission_request: Option<PermissionRequest>,
-}
 
 /// Application state
 pub struct App {
@@ -222,94 +102,6 @@ impl Default for App {
             all_providers: Vec::new(),
             command_registry: std::sync::Arc::new(CommandRegistry::new()),
             autocomplete: None,
-        }
-    }
-}
-
-impl DialogState {
-    pub fn new(dialog_type: DialogType, title: &str) -> Self {
-        Self {
-            dialog_type,
-            items: Vec::new(),
-            selected_index: 0,
-            search_query: String::new(),
-            filtered_indices: Vec::new(),
-            input_value: String::new(),
-            title: title.to_string(),
-            message: None,
-            device_code: None,
-            user_code: None,
-            verification_uri: None,
-            permission_request: None,
-        }
-    }
-
-    pub fn with_items(mut self, items: Vec<SelectItem>) -> Self {
-        self.filtered_indices = (0..items.len()).collect();
-        self.items = items;
-        self
-    }
-
-    pub fn with_message(mut self, message: &str) -> Self {
-        self.message = Some(message.to_string());
-        self
-    }
-
-    pub fn update_filter(&mut self) {
-        use fuzzy_matcher::FuzzyMatcher;
-
-        if self.search_query.is_empty() {
-            self.filtered_indices = (0..self.items.len()).collect();
-        } else {
-            let matcher = fuzzy_matcher::skim::SkimMatcherV2::default();
-
-            // Score each item and filter
-            let mut scored_items: Vec<(usize, i64)> = self
-                .items
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, item)| {
-                    // Try matching against label, id, and description
-                    let label_score = matcher.fuzzy_match(&item.label, &self.search_query);
-                    let id_score = matcher.fuzzy_match(&item.id, &self.search_query);
-                    let desc_score = item
-                        .description
-                        .as_ref()
-                        .and_then(|d| matcher.fuzzy_match(d, &self.search_query));
-
-                    // Use the best score
-                    let best_score = [label_score, id_score, desc_score]
-                        .into_iter()
-                        .flatten()
-                        .max()?;
-
-                    Some((idx, best_score))
-                })
-                .collect();
-
-            // Sort by score (descending)
-            scored_items.sort_by(|a, b| b.1.cmp(&a.1));
-
-            self.filtered_indices = scored_items.into_iter().map(|(idx, _)| idx).collect();
-        }
-        self.selected_index = 0;
-    }
-
-    pub fn selected_item(&self) -> Option<&SelectItem> {
-        self.filtered_indices
-            .get(self.selected_index)
-            .and_then(|&i| self.items.get(i))
-    }
-
-    pub fn move_up(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        if self.selected_index + 1 < self.filtered_indices.len() {
-            self.selected_index += 1;
         }
     }
 }
@@ -2413,8 +2205,8 @@ mod tests {
         #[test]
         fn test_with_items() {
             let items = create_items();
-            let dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             assert_eq!(dialog.items.len(), 3);
             assert_eq!(dialog.filtered_indices.len(), 3);
@@ -2423,8 +2215,8 @@ mod tests {
         #[test]
         fn test_move_down() {
             let items = create_items();
-            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let mut dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             assert_eq!(dialog.selected_index, 0);
             dialog.move_down();
@@ -2439,8 +2231,8 @@ mod tests {
         #[test]
         fn test_move_up() {
             let items = create_items();
-            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let mut dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             dialog.selected_index = 2;
             dialog.move_up();
@@ -2455,8 +2247,8 @@ mod tests {
         #[test]
         fn test_selected_item() {
             let items = create_items();
-            let dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             let selected = dialog.selected_item().unwrap();
             assert_eq!(selected.id, "anthropic/claude-3-5-sonnet");
@@ -2465,8 +2257,8 @@ mod tests {
         #[test]
         fn test_update_filter_empty() {
             let items = create_items();
-            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let mut dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             dialog.search_query = "".to_string();
             dialog.update_filter();
@@ -2477,8 +2269,8 @@ mod tests {
         #[test]
         fn test_update_filter_matches() {
             let items = create_items();
-            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let mut dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             dialog.search_query = "claude".to_string();
             dialog.update_filter();
@@ -2490,8 +2282,8 @@ mod tests {
         #[test]
         fn test_update_filter_no_match() {
             let items = create_items();
-            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
-                .with_items(items);
+            let mut dialog =
+                DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
 
             dialog.search_query = "xyz123notfound".to_string();
             dialog.update_filter();

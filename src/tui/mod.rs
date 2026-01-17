@@ -6,6 +6,8 @@ mod app;
 mod components;
 mod input;
 mod theme;
+mod types;
 mod ui;
 
 pub use app::run;
+pub use types::*;
