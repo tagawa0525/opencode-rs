@@ -67,7 +67,7 @@ pub async fn execute_all_tools(
                 ContentPart::ToolResult {
                     tool_use_id: call.id.clone(),
                     content: serde_json::to_string(&output_json)
-                        .unwrap_or_else(|_| tool_result.output),
+                        .unwrap_or(tool_result.output),
                     is_error: Some(false),
                 }
             }
@@ -122,7 +122,7 @@ pub async fn execute_all_tools_parallel(
                         ContentPart::ToolResult {
                             tool_use_id: call.id.clone(),
                             content: serde_json::to_string(&output_json)
-                                .unwrap_or_else(|_| tool_result.output),
+                                .unwrap_or(tool_result.output),
                             is_error: Some(false),
                         }
                     }

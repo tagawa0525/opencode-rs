@@ -29,6 +29,25 @@ pub struct DisplayMessage {
     pub role: String,
     pub content: String,
     pub time_created: i64,
+    pub parts: Vec<MessagePart>,
+}
+
+/// Message part - can be text, tool call, or tool result
+#[derive(Debug, Clone)]
+pub enum MessagePart {
+    Text {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        args: String,
+    },
+    ToolResult {
+        id: String,
+        output: String,
+        is_error: bool,
+    },
 }
 
 /// Active dialog type
@@ -41,6 +60,7 @@ pub enum DialogType {
     AuthMethodSelector,
     OAuthDeviceCode,
     OAuthWaiting,
+    PermissionRequest,
 }
 
 /// Autocomplete state for slash commands
@@ -101,6 +121,15 @@ pub struct SelectItem {
     pub provider_id: Option<String>,
 }
 
+/// Permission request for tool execution
+#[derive(Debug, Clone)]
+pub struct PermissionRequest {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub description: String,
+}
+
 /// Dialog state for selection dialogs
 #[derive(Debug, Clone)]
 pub struct DialogState {
@@ -116,6 +145,8 @@ pub struct DialogState {
     pub device_code: Option<String>,
     pub user_code: Option<String>,
     pub verification_uri: Option<String>,
+    /// For permission requests
+    pub permission_request: Option<PermissionRequest>,
 }
 
 /// Application state
@@ -209,6 +240,7 @@ impl DialogState {
             device_code: None,
             user_code: None,
             verification_uri: None,
+            permission_request: None,
         }
     }
 
@@ -527,6 +559,13 @@ impl App {
         self.dialog = None;
     }
 
+    /// Show permission request dialog
+    pub fn show_permission_request(&mut self, request: PermissionRequest) {
+        let mut dialog = DialogState::new(DialogType::PermissionRequest, "Permission Request");
+        dialog.permission_request = Some(request);
+        self.dialog = Some(dialog);
+    }
+
     /// Show autocomplete for slash commands
     pub async fn show_autocomplete(&mut self, filter: &str) {
         use fuzzy_matcher::FuzzyMatcher;
@@ -706,7 +745,32 @@ impl App {
             role: role.to_string(),
             content: content.to_string(),
             time_created: chrono::Utc::now().timestamp_millis(),
+            parts: vec![MessagePart::Text {
+                text: content.to_string(),
+            }],
         });
+    }
+
+    /// Add a tool call to the last message
+    pub fn add_tool_call(&mut self, id: &str, name: &str, args: &str) {
+        if let Some(msg) = self.messages.last_mut() {
+            msg.parts.push(MessagePart::ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                args: args.to_string(),
+            });
+        }
+    }
+
+    /// Add a tool result to the messages
+    pub fn add_tool_result(&mut self, id: &str, output: &str, is_error: bool) {
+        if let Some(msg) = self.messages.last_mut() {
+            msg.parts.push(MessagePart::ToolResult {
+                id: id.to_string(),
+                output: output.to_string(),
+                is_error,
+            });
+        }
     }
 
     /// Update the last assistant message
@@ -818,6 +882,17 @@ enum AppEvent {
     StreamDone,
     StreamError(String),
     ToolCall(String, String),
+    ToolResult {
+        id: String,
+        output: String,
+        is_error: bool,
+    },
+    PermissionRequested(PermissionRequest),
+    PermissionResponse {
+        id: String,
+        allow: bool,
+        always: bool,
+    },
     // OAuth events
     DeviceCodeReceived {
         user_code: String,
@@ -1004,43 +1079,22 @@ async fn run_app(
                             // Add empty assistant message
                             app.add_message("assistant", "");
 
-                            // Start streaming
+                            // Start agentic loop
                             let tx = event_tx.clone();
                             let provider_id = app.provider_id.clone();
                             let model_id = app.model_id.clone();
                             let prompt = input.clone();
 
                             tokio::spawn(async move {
-                                match stream_response(&provider_id, &model_id, &prompt).await {
-                                    Ok(mut rx) => {
-                                        while let Some(event) = rx.recv().await {
-                                            match event {
-                                                StreamEvent::TextDelta(text) => {
-                                                    let _ =
-                                                        tx.send(AppEvent::StreamDelta(text)).await;
-                                                }
-                                                StreamEvent::Done { .. } => {
-                                                    let _ = tx.send(AppEvent::StreamDone).await;
-                                                }
-                                                StreamEvent::Error(err) => {
-                                                    let _ =
-                                                        tx.send(AppEvent::StreamError(err)).await;
-                                                }
-                                                StreamEvent::ToolCallStart { name, .. } => {
-                                                    let _ = tx
-                                                        .send(AppEvent::ToolCall(
-                                                            name,
-                                                            String::new(),
-                                                        ))
-                                                        .await;
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
-                                    }
+                                if let Err(e) = stream_response_agentic(
+                                    provider_id,
+                                    model_id,
+                                    prompt,
+                                    tx.clone(),
+                                )
+                                .await
+                                {
+                                    let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
                                 }
                             });
                         }
@@ -1072,8 +1126,9 @@ async fn run_app(
                     app.status = "Error".to_string();
                     app.add_message("system", &format!("Error: {}", err));
                 }
-                AppEvent::ToolCall(name, _args) => {
+                AppEvent::ToolCall(name, id) => {
                     app.append_to_assistant(&format!("\n[Calling tool: {}]\n", name));
+                    app.add_tool_call(&id, &name, "");
                 }
                 AppEvent::DeviceCodeReceived {
                     user_code,
@@ -1101,6 +1156,51 @@ async fn run_app(
                 AppEvent::OAuthError(err) => {
                     if let Some(dialog) = &mut app.dialog {
                         dialog.message = Some(format!("Error: {}", err));
+                    }
+                }
+                AppEvent::ToolResult {
+                    id,
+                    output,
+                    is_error,
+                } => {
+                    // Show tool result in messages
+                    let status = if is_error { "ERROR" } else { "OK" };
+                    let mut display_output = output.clone();
+
+                    // Try to parse as JSON and extract meaningful info
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
+                        if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                            display_output = title.to_string();
+                        }
+                    }
+
+                    // Limit output length for display
+                    if display_output.len() > 200 {
+                        display_output = format!("{}...", &display_output[..200]);
+                    }
+
+                    app.append_to_assistant(&format!(
+                        "\n[Tool {} result: {}] {}\n",
+                        id, status, display_output
+                    ));
+                    app.add_tool_result(&id, &output, is_error);
+                }
+                AppEvent::PermissionRequested(request) => {
+                    // Show permission dialog
+                    app.show_permission_request(request);
+                }
+                AppEvent::PermissionResponse { id, allow, always } => {
+                    // Handle permission response
+                    // TODO: Send response back to agentic loop
+                    // For now, just log it
+                    if allow {
+                        if always {
+                            app.status = format!("Permission granted (always): {}", id);
+                        } else {
+                            app.status = format!("Permission granted (once): {}", id);
+                        }
+                    } else {
+                        app.status = format!("Permission denied: {}", id);
                     }
                 }
             }
@@ -1325,6 +1425,60 @@ async fn handle_dialog_input(
                 app.open_provider_selector();
             }
         }
+        Some(DialogType::PermissionRequest) => {
+            // Handle permission dialog input
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // Allow once
+                    if let Some(dialog) = &app.dialog {
+                        if let Some(req) = &dialog.permission_request {
+                            let id = req.id.clone();
+                            app.close_dialog();
+                            let _ = event_tx
+                                .send(AppEvent::PermissionResponse {
+                                    id,
+                                    allow: true,
+                                    always: false,
+                                })
+                                .await;
+                        }
+                    }
+                }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    // Allow always
+                    if let Some(dialog) = &app.dialog {
+                        if let Some(req) = &dialog.permission_request {
+                            let id = req.id.clone();
+                            app.close_dialog();
+                            let _ = event_tx
+                                .send(AppEvent::PermissionResponse {
+                                    id,
+                                    allow: true,
+                                    always: true,
+                                })
+                                .await;
+                        }
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    // Reject
+                    if let Some(dialog) = &app.dialog {
+                        if let Some(req) = &dialog.permission_request {
+                            let id = req.id.clone();
+                            app.close_dialog();
+                            let _ = event_tx
+                                .send(AppEvent::PermissionResponse {
+                                    id,
+                                    allow: false,
+                                    always: false,
+                                })
+                                .await;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         _ => {
             if key.code == KeyCode::Esc {
                 app.close_dialog();
@@ -1332,6 +1486,328 @@ async fn handle_dialog_input(
         }
     }
 
+    Ok(())
+}
+
+/// Stream a response from the LLM with agentic loop
+async fn stream_response_agentic(
+    provider_id: String,
+    model_id: String,
+    initial_prompt: String,
+    event_tx: mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    use crate::config::Config;
+    use crate::permission::PermissionChecker;
+    use crate::provider::{self, ChatContent, ChatMessage, ContentPart, StreamingClient};
+    use crate::tool::{self, DoomLoopDetector, ToolCallTracker};
+    use std::sync::Arc;
+    use tokio::sync::oneshot;
+
+    let config = Config::load().await?;
+    let permission_checker = PermissionChecker::from_config(&config);
+
+    let provider = provider::registry()
+        .get(&provider_id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Provider not found: {}", provider_id))?;
+
+    let model = provider
+        .models
+        .get(&model_id)
+        .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+
+    let api_key = provider
+        .key
+        .ok_or_else(|| anyhow::anyhow!("No API key for provider: {}", provider_id))?;
+
+    // Prepare tool definitions
+    let tools = tool::registry().definitions().await;
+    let tool_defs: Vec<provider::ToolDefinition> = tools
+        .into_iter()
+        .map(|t| provider::ToolDefinition {
+            name: t.name,
+            description: t.description,
+            input_schema: t.parameters,
+        })
+        .collect();
+
+    // Tool execution context
+    let tool_ctx = Arc::new(tool::ToolContext {
+        session_id: String::new(),
+        message_id: String::new(),
+        agent: "tui".to_string(),
+        abort: None,
+        cwd: std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| ".".to_string()),
+        root: std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| ".".to_string()),
+        extra: Default::default(),
+    });
+
+    // Initialize conversation with user message
+    let mut messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: ChatContent::Text(initial_prompt),
+    }];
+
+    let client = StreamingClient::new();
+    let mut step = 0;
+    let max_steps = 10;
+    let mut doom_detector = DoomLoopDetector::new();
+
+    // Create channel for permission responses (for future use)
+    let (_perm_tx, mut _perm_rx) = mpsc::channel::<(String, bool, bool)>(10);
+
+    loop {
+        step += 1;
+        if step > max_steps {
+            let _ = event_tx
+                .send(AppEvent::StreamError(
+                    "Maximum agentic loop steps reached".to_string(),
+                ))
+                .await;
+            break;
+        }
+
+        // Stream the response
+        let mut rx = match provider_id.as_str() {
+            "anthropic" => {
+                client
+                    .stream_anthropic(
+                        &api_key,
+                        &model.api.id,
+                        messages.clone(),
+                        None,
+                        tool_defs.clone(),
+                        model.limit.output,
+                    )
+                    .await?
+            }
+            "openai" => {
+                let base_url = model
+                    .api
+                    .url
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                client
+                    .stream_openai(
+                        &api_key,
+                        base_url,
+                        &model.api.id,
+                        messages.clone(),
+                        tool_defs.clone(),
+                        model.limit.output,
+                    )
+                    .await?
+            }
+            "copilot" => {
+                client
+                    .stream_copilot(
+                        &api_key,
+                        &model.api.id,
+                        messages.clone(),
+                        tool_defs.clone(),
+                        model.limit.output,
+                    )
+                    .await?
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Unsupported provider: {}", provider_id));
+            }
+        };
+
+        // Collect response
+        let mut response_text = String::new();
+        let mut tool_tracker = ToolCallTracker::new();
+        let mut finish_reason = String::new();
+        let mut assistant_parts: Vec<ContentPart> = Vec::new();
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::TextDelta(text) => {
+                    let _ = event_tx.send(AppEvent::StreamDelta(text.clone())).await;
+                    response_text.push_str(&text);
+                }
+                StreamEvent::ToolCallStart { id, name } => {
+                    let _ = event_tx
+                        .send(AppEvent::ToolCall(name.clone(), id.clone()))
+                        .await;
+                    tool_tracker.start_call(id, name);
+                }
+                StreamEvent::ToolCallDelta {
+                    id,
+                    arguments_delta,
+                } => {
+                    tool_tracker.add_arguments(&id, &arguments_delta);
+                }
+                StreamEvent::Done {
+                    finish_reason: reason,
+                } => {
+                    finish_reason = reason;
+                }
+                StreamEvent::Error(err) => {
+                    let _ = event_tx.send(AppEvent::StreamError(err.clone())).await;
+                    return Err(anyhow::anyhow!(err));
+                }
+                _ => {}
+            }
+        }
+
+        // Add assistant response to conversation
+        if !response_text.is_empty() {
+            assistant_parts.push(ContentPart::Text {
+                text: response_text.clone(),
+            });
+        }
+
+        // Check if there are tool calls to execute
+        let pending_calls = tool_tracker.get_all_calls();
+
+        if !pending_calls.is_empty() {
+            // Check for doom loop
+            doom_detector.add_calls(&pending_calls);
+
+            if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
+                // Request permission for doom loop continuation
+                let req_id = format!("doom_loop_{}", step);
+                let request = PermissionRequest {
+                    id: req_id.clone(),
+                    tool_name: "doom_loop".to_string(),
+                    arguments: format!("Tool '{}' with args: {}", tool_name, args),
+                    description: format!(
+                        "Doom loop detected: '{}' called {} times with identical arguments",
+                        tool_name,
+                        tool::DOOM_LOOP_THRESHOLD
+                    ),
+                };
+
+                let _ = event_tx.send(AppEvent::PermissionRequested(request)).await;
+
+                // Wait for permission response
+                // TODO: Implement async permission waiting
+                // For now, break the loop
+                break;
+            }
+
+            // Request permissions for each tool call
+            // TODO: Implement async permission system
+            // For now, auto-allow read/glob/grep, ask for others
+
+            let mut approved_calls = Vec::new();
+            for call in &pending_calls {
+                let action = permission_checker.check_tool(&call.name);
+
+                match action {
+                    crate::config::PermissionAction::Allow => {
+                        approved_calls.push(call.clone());
+                    }
+                    crate::config::PermissionAction::Deny => {
+                        // Skip this call
+                    }
+                    crate::config::PermissionAction::Ask => {
+                        // Request permission via dialog
+                        let req_id = format!("tool_{}_{}", call.id, step);
+                        let request = PermissionRequest {
+                            id: req_id.clone(),
+                            tool_name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            description: format!("Allow tool '{}' to execute?", call.name),
+                        };
+
+                        let _ = event_tx.send(AppEvent::PermissionRequested(request)).await;
+
+                        // Wait for permission response
+                        // TODO: Implement proper async waiting
+                        // For now, just skip
+                    }
+                }
+            }
+
+            if approved_calls.is_empty() {
+                break;
+            }
+
+            // Add tool use parts to assistant message
+            for call in &approved_calls {
+                let args: serde_json::Value =
+                    serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+
+                assistant_parts.push(ContentPart::ToolUse {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: args,
+                });
+            }
+
+            // Add assistant message with tool calls
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if assistant_parts.len() == 1 {
+                    match &assistant_parts[0] {
+                        ContentPart::Text { text } => ChatContent::Text(text.clone()),
+                        _ => ChatContent::Parts(assistant_parts.clone()),
+                    }
+                } else {
+                    ChatContent::Parts(assistant_parts)
+                },
+            });
+
+            // Execute tools in parallel
+            let tool_results = tool::execute_all_tools_parallel(approved_calls, &tool_ctx).await;
+
+            // Send tool results as events
+            for result in &tool_results {
+                if let ContentPart::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } = result
+                {
+                    let _ = event_tx
+                        .send(AppEvent::ToolResult {
+                            id: tool_use_id.clone(),
+                            output: content.clone(),
+                            is_error: is_error.unwrap_or(false),
+                        })
+                        .await;
+                }
+            }
+
+            // Add tool results to conversation
+            messages.push(ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Parts(tool_results),
+            });
+
+            // Continue loop
+        } else {
+            // No tool calls - add final assistant message and exit loop
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if assistant_parts.len() == 1 {
+                    match &assistant_parts[0] {
+                        ContentPart::Text { text } => ChatContent::Text(text.clone()),
+                        _ => ChatContent::Parts(assistant_parts),
+                    }
+                } else if !assistant_parts.is_empty() {
+                    ChatContent::Parts(assistant_parts)
+                } else {
+                    ChatContent::Text(String::new())
+                },
+            });
+
+            // Check finish reason
+            if finish_reason == "stop" || finish_reason == "end_turn" || finish_reason == "length" {
+                break;
+            }
+        }
+    }
+
+    let _ = event_tx.send(AppEvent::StreamDone).await;
     Ok(())
 }
 

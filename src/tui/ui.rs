@@ -134,6 +134,9 @@ fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &super::theme::
         DialogType::OAuthWaiting => {
             render_waiting_dialog(frame, dialog, theme, inner);
         }
+        DialogType::PermissionRequest => {
+            render_permission_dialog(frame, dialog, theme, inner);
+        }
         DialogType::None => {}
     }
 }
@@ -532,4 +535,92 @@ fn render_autocomplete(
 
     let list = List::new(items);
     frame.render_widget(list, chunks[1]);
+}
+
+/// Render permission request dialog
+fn render_permission_dialog(
+    frame: &mut Frame,
+    dialog: &DialogState,
+    theme: &super::theme::Theme,
+    area: Rect,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Title
+            Constraint::Length(1), // Spacer
+            Constraint::Length(2), // Tool name
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Arguments/Description
+            Constraint::Length(1), // Spacer
+            Constraint::Length(3), // Options
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    // Title
+    let title_text = "Permission Required";
+    let title = Paragraph::new(title_text)
+        .style(
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Center);
+    frame.render_widget(title, chunks[0]);
+
+    // Tool name
+    if let Some(req) = &dialog.permission_request {
+        let tool_label = format!("Tool: {}", req.tool_name);
+        let tool = Paragraph::new(tool_label)
+            .style(Style::default().fg(theme.accent))
+            .alignment(Alignment::Left);
+        frame.render_widget(tool, chunks[2]);
+
+        // Arguments / Description
+        let args_text = if req.arguments.len() > 200 {
+            format!("{}\n\n{}...", req.description, &req.arguments[..200])
+        } else {
+            format!("{}\n\n{}", req.description, req.arguments)
+        };
+        let args = Paragraph::new(args_text)
+            .style(Style::default().fg(theme.foreground))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(args, chunks[4]);
+
+        // Options
+        let options = vec![Line::from(vec![
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Allow once    "),
+            Span::styled(
+                "[A]",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Allow always    "),
+            Span::styled(
+                "[N]",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Reject"),
+        ])];
+        let options_widget = Paragraph::new(options)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(theme.foreground));
+        frame.render_widget(options_widget, chunks[6]);
+    }
+
+    // Help text
+    let help = Paragraph::new("Press Y/A/N to choose | Esc: Cancel")
+        .style(Style::default().fg(theme.dim))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[7]);
 }
