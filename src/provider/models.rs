@@ -56,7 +56,14 @@ impl ModelRecommendations {
 
 /// Sort models by preference for display
 pub fn sort_models(models: &mut [Model]) {
-    let priority = ["claude-sonnet-4-5", "claude-opus-4-5", "claude-sonnet-4", "gpt-4o", "gemini-2.0", "o1"];
+    let priority = [
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "claude-sonnet-4",
+        "gpt-4o",
+        "gemini-2.0",
+        "o1",
+    ];
 
     models.sort_by(|a, b| {
         let a_priority = priority
