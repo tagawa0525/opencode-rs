@@ -610,7 +610,18 @@ impl Config {
 
         let config_path = config_dir.join("opencode.json");
 
-        if !config_path.exists() {
+        // Use try_exists() to properly handle symlinks (e.g., in NixOS)
+        // This checks if the symlink itself exists, not just its target
+        let should_create = match config_path.try_exists() {
+            Ok(exists) => !exists,
+            Err(_) => {
+                // If we can't determine existence (permissions issue, etc.),
+                // check if symlink metadata exists to avoid overwriting symlinks
+                fs::symlink_metadata(&config_path).await.is_err()
+            }
+        };
+
+        if should_create {
             // Create default config
             let default_config = Config {
                 schema: Some("https://opencode.ai/schema/config.json".to_string()),
