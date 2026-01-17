@@ -88,6 +88,99 @@ pub struct ToolDefinition {
     pub input_schema: serde_json::Value,
 }
 
+/// Convert messages to OpenAI format
+/// OpenAI expects:
+/// - Tool calls as tool_calls array in assistant messages
+/// - Tool results as separate messages with role="tool"
+fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Value> {
+    let mut result = Vec::new();
+    
+    for msg in messages {
+        match msg.content {
+            ChatContent::Text(text) => {
+                result.push(serde_json::json!({
+                    "role": msg.role,
+                    "content": text,
+                }));
+            }
+            ChatContent::Parts(parts) => {
+                let mut text_parts = Vec::new();
+                let mut tool_calls = Vec::new();
+                let mut tool_results = Vec::new();
+                
+                for part in parts {
+                    match part {
+                        ContentPart::Text { text } => {
+                            text_parts.push(serde_json::json!({
+                                "type": "text",
+                                "text": text,
+                            }));
+                        }
+                        ContentPart::ImageUrl { image_url } => {
+                            text_parts.push(serde_json::json!({
+                                "type": "image_url",
+                                "image_url": image_url,
+                            }));
+                        }
+                        ContentPart::ToolUse { id, name, input } => {
+                            // OpenAI uses tool_calls array, not content parts
+                            tool_calls.push(serde_json::json!({
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": serde_json::to_string(&input).unwrap_or_default(),
+                                }
+                            }));
+                        }
+                        ContentPart::ToolResult { tool_use_id, content, is_error: _ } => {
+                            // OpenAI expects tool results as separate messages
+                            tool_results.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": content,
+                            }));
+                        }
+                    }
+                }
+                
+                // Add main message if it has content or tool calls
+                if !text_parts.is_empty() || !tool_calls.is_empty() {
+                    let mut message = serde_json::json!({
+                        "role": msg.role,
+                    });
+                    
+                    // Add content if we have text/image parts
+                    if !text_parts.is_empty() {
+                        if text_parts.len() == 1 && text_parts[0]["type"] == "text" {
+                            // Simple text content
+                            message["content"] = text_parts[0]["text"].clone();
+                        } else {
+                            // Multiple parts or images
+                            message["content"] = serde_json::json!(text_parts);
+                        }
+                    } else if tool_calls.is_empty() {
+                        // No content and no tool calls - add empty content
+                        message["content"] = serde_json::json!("");
+                    }
+                    
+                    // Add tool_calls if we have any
+                    if !tool_calls.is_empty() {
+                        message["tool_calls"] = serde_json::json!(tool_calls);
+                    }
+                    
+                    result.push(message);
+                }
+                
+                // Add tool result messages
+                result.extend(tool_results);
+            }
+        }
+    }
+    
+    result
+}
+
 /// Streaming client for LLM APIs
 pub struct StreamingClient {
     client: Client,
@@ -220,10 +313,13 @@ impl StreamingClient {
             })
             .collect();
 
+        // Convert messages to OpenAI format (handles tool results properly)
+        let openai_messages = convert_messages_to_openai(messages);
+
         let request_body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": openai_messages,
             "tools": openai_tools,
             "stream": true,
             "stream_options": {
@@ -317,10 +413,13 @@ impl StreamingClient {
             })
             .collect();
 
+        // Convert messages to OpenAI format (handles tool results properly)
+        let openai_messages = convert_messages_to_openai(messages);
+
         let request_body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": openai_messages,
             "tools": openai_tools,
             "stream": true,
         });
