@@ -327,11 +327,40 @@ impl App {
         app.all_providers = provider::registry().list().await;
         app.available_providers = provider::registry().list_available().await;
 
-        // Try to get model
+        // Create session first
+        let session = Session::create(CreateSessionOptions::default()).await?;
+        app.session_title = session.title.clone();
+        app.session_slug = session.slug.clone();
+
+        // Load model with priority: CLI arg > Session > Workspace config > Global config > Last used
         let model_result = if let Some(m) = model {
+            // CLI argument takes highest priority
             provider::parse_model_string(&m)
+        } else if let Some(session_model) = session.get_model().await {
+            // Session model is second priority
+            Some((session_model.provider_id, session_model.model_id))
+        } else if let Some(configured_model) = config.model.as_ref() {
+            // Workspace/global config is third priority
+            provider::parse_model_string(configured_model)
         } else {
-            provider::registry().default_model(&config).await
+            // Fall back to last used model from global storage
+            match crate::storage::global()
+                .read::<String>(&["state", "last_model"])
+                .await
+            {
+                Ok(Some(last_model)) => {
+                    tracing::debug!("Loaded last used model: {}", last_model);
+                    provider::parse_model_string(&last_model)
+                }
+                Ok(None) => {
+                    tracing::debug!("No last used model found");
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load last used model: {}", e);
+                    None
+                }
+            }
         };
 
         if let Some((provider_id, model_id)) = model_result {
@@ -345,10 +374,6 @@ impl App {
             app.model_configured = false;
         }
 
-        // Create session
-        let session = Session::create(CreateSessionOptions::default()).await?;
-        app.session_title = session.title.clone();
-        app.session_slug = session.slug.clone();
         app.session = Some(session);
 
         // Apply theme from config
@@ -663,6 +688,29 @@ impl App {
         self.model_display = format!("{}/{}", provider_id, model.name);
         self.model_configured = true;
         self.close_dialog();
+
+        // Save to session
+        if let Some(session) = &mut self.session {
+            let model_ref = crate::session::ModelRef {
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+            };
+            if let Err(e) = session
+                .set_model(&session.project_id.clone(), model_ref)
+                .await
+            {
+                tracing::warn!("Failed to save model to session: {}", e);
+            }
+        }
+
+        // Save last used model to global storage (fallback)
+        let model_string = format!("{}/{}", provider_id, model_id);
+        if let Err(e) = crate::storage::global()
+            .write(&["state", "last_model"], &model_string)
+            .await
+        {
+            tracing::warn!("Failed to save last used model: {}", e);
+        }
 
         Ok(())
     }

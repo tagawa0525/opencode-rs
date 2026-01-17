@@ -15,15 +15,35 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     // Initialize provider registry
     provider::registry().initialize(&config).await?;
 
-    // Get model to use
+    // Create a session first
+    let mut session = Session::create(CreateSessionOptions::default()).await?;
+
+    // Get model to use with priority: CLI arg > Session > Workspace config > Global config > Last used
     let (provider_id, model_id) = if let Some(m) = model {
+        // CLI argument takes highest priority
         provider::parse_model_string(m)
             .ok_or_else(|| anyhow::anyhow!("Invalid model format. Use 'provider/model'"))?
+    } else if let Some(session_model) = session.get_model().await {
+        // Session model is second priority
+        (session_model.provider_id, session_model.model_id)
+    } else if let Some(configured_model) = config.model.as_ref() {
+        // Workspace/global config is third priority
+        provider::parse_model_string(configured_model)
+            .ok_or_else(|| anyhow::anyhow!("Invalid model format in config"))?
     } else {
-        provider::registry()
-            .default_model(&config)
+        // Fall back to last used model from global storage
+        match crate::storage::global()
+            .read::<String>(&["state", "last_model"])
             .await
-            .ok_or_else(|| anyhow::anyhow!("No default model configured"))?
+        {
+            Ok(Some(last_model)) => provider::parse_model_string(&last_model)
+                .ok_or_else(|| anyhow::anyhow!("Invalid last used model format"))?,
+            Ok(None) | Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "No model configured. Set a default model in config or use --model flag"
+                ))
+            }
+        }
     };
 
     // Get the model info
@@ -41,9 +61,6 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     let api_key = provider_info
         .key
         .ok_or_else(|| anyhow::anyhow!("No API key for provider: {}", provider_id))?;
-
-    // Create a session
-    let _session = Session::create(CreateSessionOptions::default()).await?;
 
     // Create permission checker
     let permission_checker = PermissionChecker::from_config(&config);
@@ -369,6 +386,28 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
         _ => {
             // Already printed during streaming
         }
+    }
+
+    // Save model to session
+    let model_ref = crate::session::ModelRef {
+        provider_id: provider_id.clone(),
+        model_id: model_id.clone(),
+    };
+    // Note: We need to make session mutable and keep it in scope
+    if let Err(e) = session
+        .set_model(&session.project_id.clone(), model_ref)
+        .await
+    {
+        tracing::warn!("Failed to save model to session: {}", e);
+    }
+
+    // Save last used model to global storage (fallback)
+    let model_string = format!("{}/{}", provider_id, model_id);
+    if let Err(e) = crate::storage::global()
+        .write(&["state", "last_model"], &model_string)
+        .await
+    {
+        tracing::warn!("Failed to save last used model: {}", e);
     }
 
     Ok(())

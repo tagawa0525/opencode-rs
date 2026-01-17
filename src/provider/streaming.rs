@@ -94,7 +94,7 @@ pub struct ToolDefinition {
 /// - Tool results as separate messages with role="tool"
 fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Value> {
     let mut result = Vec::new();
-    
+
     for msg in messages {
         match msg.content {
             ChatContent::Text(text) => {
@@ -107,7 +107,7 @@ fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Val
                 let mut text_parts = Vec::new();
                 let mut tool_calls = Vec::new();
                 let mut tool_results = Vec::new();
-                
+
                 for part in parts {
                     match part {
                         ContentPart::Text { text } => {
@@ -133,7 +133,11 @@ fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Val
                                 }
                             }));
                         }
-                        ContentPart::ToolResult { tool_use_id, content, is_error: _ } => {
+                        ContentPart::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: _,
+                        } => {
                             // OpenAI expects tool results as separate messages
                             tool_results.push(serde_json::json!({
                                 "role": "tool",
@@ -143,13 +147,13 @@ fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Val
                         }
                     }
                 }
-                
+
                 // Add main message if it has content or tool calls
                 if !text_parts.is_empty() || !tool_calls.is_empty() {
                     let mut message = serde_json::json!({
                         "role": msg.role,
                     });
-                    
+
                     // Add content if we have text/image parts
                     if !text_parts.is_empty() {
                         if text_parts.len() == 1 && text_parts[0]["type"] == "text" {
@@ -163,21 +167,21 @@ fn convert_messages_to_openai(messages: Vec<ChatMessage>) -> Vec<serde_json::Val
                         // No content and no tool calls - add empty content
                         message["content"] = serde_json::json!("");
                     }
-                    
+
                     // Add tool_calls if we have any
                     if !tool_calls.is_empty() {
                         message["tool_calls"] = serde_json::json!(tool_calls);
                     }
-                    
+
                     result.push(message);
                 }
-                
+
                 // Add tool result messages
                 result.extend(tool_results);
             }
         }
     }
-    
+
     result
 }
 
