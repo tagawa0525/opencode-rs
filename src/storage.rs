@@ -23,7 +23,7 @@ impl Default for StorageConfig {
     fn default() -> Self {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("opencode");
+            .join("opencode-rs");
         Self { base_path: base }
     }
 }

@@ -1,7 +1,7 @@
 //! Authentication storage module.
 //!
 //! This module handles persistent storage of API keys and authentication tokens.
-//! Credentials are stored in ~/.local/share/opencode/auth.json
+//! Credentials are stored in ~/.local/share/opencode-rs/auth.json
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ pub struct OAuthToken {
 impl AuthStorage {
     /// Get the auth storage file path
     pub fn storage_path() -> Option<PathBuf> {
-        dirs::data_local_dir().map(|p| p.join("opencode").join("auth.json"))
+        dirs::data_local_dir().map(|p| p.join("opencode-rs").join("auth.json"))
     }
 
     /// Load auth storage from disk

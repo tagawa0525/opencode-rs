@@ -1,7 +1,7 @@
 //! Configuration management module.
 //!
 //! This module handles loading and managing configuration from various sources:
-//! - Global config file (~/.config/opencode/opencode.json)
+//! - Global config file (~/.config/opencode-rs/opencode.json)
 //! - Project config file (./opencode.json or ./opencode.jsonc)
 //! - Environment variables
 //!
@@ -331,7 +331,7 @@ impl Config {
 
     /// Get the global config directory path
     pub fn global_config_dir() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("opencode"))
+        dirs::config_dir().map(|p| p.join("opencode-rs"))
     }
 
     /// Get the global config file path
