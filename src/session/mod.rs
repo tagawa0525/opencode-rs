@@ -4,9 +4,11 @@
 //! message management, and session lifecycle.
 
 mod message;
+mod parts;
 mod types;
 
 pub use message::*;
+pub use parts::*;
 #[allow(unused_imports)]
 pub use types::*;
 
