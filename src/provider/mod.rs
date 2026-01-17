@@ -261,7 +261,32 @@ impl ProviderRegistry {
             providers.retain(|id, _| enabled_set.contains(id));
         }
 
+        // Start background refresh task (every 60 minutes)
+        Self::start_background_refresh();
+
         Ok(())
+    }
+
+    /// Start a background task to refresh models cache every 60 minutes
+    fn start_background_refresh() {
+        if models_dev::is_fetch_disabled() {
+            tracing::debug!("Models fetch is disabled, skipping background refresh");
+            return;
+        }
+
+        tokio::spawn(async {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            // Skip the first tick (immediate fire)
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+                tracing::debug!("Running scheduled models.dev refresh");
+                models_dev::refresh().await;
+            }
+        });
+
+        tracing::info!("Started background refresh task (every 60 minutes)");
     }
 
     /// Add built-in provider definitions
@@ -276,7 +301,7 @@ impl ProviderRegistry {
                 env: vec!["ANTHROPIC_API_KEY".to_string()],
                 key: None,
                 options: HashMap::new(),
-                models: Self::anthropic_models(),
+                models: Self::anthropic_models().await,
             },
         );
 
@@ -290,7 +315,7 @@ impl ProviderRegistry {
                 env: vec!["OPENAI_API_KEY".to_string()],
                 key: None,
                 options: HashMap::new(),
-                models: Self::openai_models(),
+                models: Self::openai_models().await,
             },
         );
 
@@ -304,7 +329,7 @@ impl ProviderRegistry {
                 env: vec!["GOOGLE_API_KEY".to_string(), "GEMINI_API_KEY".to_string()],
                 key: None,
                 options: HashMap::new(),
-                models: Self::google_models(),
+                models: Self::google_models().await,
             },
         );
 
@@ -325,283 +350,47 @@ impl ProviderRegistry {
         Ok(())
     }
 
-    fn anthropic_models() -> HashMap<String, Model> {
-        let mut models = HashMap::new();
-
-        models.insert(
-            "claude-sonnet-4-20250514".to_string(),
-            Model {
-                id: "claude-sonnet-4-20250514".to_string(),
-                provider_id: "anthropic".to_string(),
-                name: "Claude Sonnet 4".to_string(),
-                family: Some("claude-4".to_string()),
-                api: ModelApi {
-                    id: "claude-sonnet-4-20250514".to_string(),
-                    url: Some("https://api.anthropic.com".to_string()),
-                    npm: Some("@ai-sdk/anthropic".to_string()),
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: true,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        pdf: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(true),
-                },
-                cost: ModelCost {
-                    input: 3.0,
-                    output: 15.0,
-                    cache_read: 0.3,
-                    cache_write: 3.75,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 16384,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2025-05-14".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "claude-3-5-sonnet-20241022".to_string(),
-            Model {
-                id: "claude-3-5-sonnet-20241022".to_string(),
-                provider_id: "anthropic".to_string(),
-                name: "Claude 3.5 Sonnet".to_string(),
-                family: Some("claude-3.5".to_string()),
-                api: ModelApi {
-                    id: "claude-3-5-sonnet-20241022".to_string(),
-                    url: Some("https://api.anthropic.com".to_string()),
-                    npm: Some("@ai-sdk/anthropic".to_string()),
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        pdf: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 3.0,
-                    output: 15.0,
-                    cache_read: 0.3,
-                    cache_write: 3.75,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 8192,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2024-10-22".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models
+    async fn anthropic_models() -> HashMap<String, Model> {
+        Self::load_models_from_dev("anthropic", &[]).await
     }
 
-    fn openai_models() -> HashMap<String, Model> {
-        let mut models = HashMap::new();
-
-        models.insert(
-            "gpt-4o".to_string(),
-            Model {
-                id: "gpt-4o".to_string(),
-                provider_id: "openai".to_string(),
-                name: "GPT-4o".to_string(),
-                family: Some("gpt-4o".to_string()),
-                api: ModelApi {
-                    id: "gpt-4o".to_string(),
-                    url: Some("https://api.openai.com".to_string()),
-                    npm: Some("@ai-sdk/openai".to_string()),
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        audio: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        audio: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 2.5,
-                    output: 10.0,
-                    cache_read: 1.25,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 128000,
-                    input: None,
-                    output: 16384,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2024-05-13".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "o1".to_string(),
-            Model {
-                id: "o1".to_string(),
-                provider_id: "openai".to_string(),
-                name: "o1".to_string(),
-                family: Some("o1".to_string()),
-                api: ModelApi {
-                    id: "o1".to_string(),
-                    url: Some("https://api.openai.com".to_string()),
-                    npm: Some("@ai-sdk/openai".to_string()),
-                },
-                capabilities: ModelCapabilities {
-                    temperature: false,
-                    reasoning: true,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Field {
-                        field: "reasoning_content".to_string(),
-                    },
-                },
-                cost: ModelCost {
-                    input: 15.0,
-                    output: 60.0,
-                    cache_read: 7.5,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 100000,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2024-12-17".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models
+    async fn openai_models() -> HashMap<String, Model> {
+        Self::load_models_from_dev("openai", &[]).await
     }
 
-    fn google_models() -> HashMap<String, Model> {
-        let mut models = HashMap::new();
-
-        models.insert(
-            "gemini-2.0-flash".to_string(),
-            Model {
-                id: "gemini-2.0-flash".to_string(),
-                provider_id: "google".to_string(),
-                name: "Gemini 2.0 Flash".to_string(),
-                family: Some("gemini-2.0".to_string()),
-                api: ModelApi {
-                    id: "gemini-2.0-flash".to_string(),
-                    url: Some("https://generativelanguage.googleapis.com".to_string()),
-                    npm: Some("@ai-sdk/google".to_string()),
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        video: true,
-                        audio: true,
-                        pdf: true,
-                    },
-                    output: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 0.1,
-                    output: 0.4,
-                    cache_read: 0.025,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 1000000,
-                    input: None,
-                    output: 8192,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2024-12-11".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models
+    async fn google_models() -> HashMap<String, Model> {
+        Self::load_models_from_dev("google", &[]).await
     }
 
     async fn copilot_models() -> HashMap<String, Model> {
+        Self::load_models_from_dev("github-copilot", &["copilot"]).await
+    }
+
+    /// Load models from models.dev API for a specific provider
+    ///
+    /// # Arguments
+    /// * `primary_id` - Primary provider ID to look for in models.dev
+    /// * `fallback_ids` - Alternative provider IDs to try if primary not found
+    async fn load_models_from_dev(
+        primary_id: &str,
+        fallback_ids: &[&str],
+    ) -> HashMap<String, Model> {
         // Try to load models dynamically from models.dev API
         // Fall back to empty HashMap if fetch is disabled or fails
         match models_dev::get().await {
             Ok(providers) => {
-                // Get the github-copilot or copilot provider from models.dev
-                let provider = providers.get("github-copilot")
-                    .or_else(|| providers.get("copilot"));
-                
+                // Try primary ID first, then fallbacks
+                let provider = providers
+                    .get(primary_id)
+                    .or_else(|| fallback_ids.iter().find_map(|id| providers.get(*id)));
+
                 if let Some(provider) = provider {
                     tracing::info!(
-                        "Loaded {} GitHub Copilot models from models.dev",
-                        provider.models.len()
+                        "Loaded {} {} models from models.dev",
+                        provider.models.len(),
+                        provider.name
                     );
-                    
+
                     // Convert models.dev models to our Model struct
                     provider
                         .models
@@ -609,13 +398,19 @@ impl ProviderRegistry {
                         .map(|(id, model)| (id.clone(), models_dev::to_model(provider, model)))
                         .collect()
                 } else {
-                    tracing::warn!("GitHub Copilot provider not found in models.dev, using empty model list");
+                    tracing::warn!(
+                        "{} provider not found in models.dev, using empty model list",
+                        primary_id
+                    );
                     HashMap::new()
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to load models from models.dev: {}", e);
-                tracing::warn!("GitHub Copilot models unavailable - check network or set models cache");
+                tracing::warn!(
+                    "{} models unavailable - check network or set models cache",
+                    primary_id
+                );
                 HashMap::new()
             }
         }
@@ -649,6 +444,48 @@ impl ProviderRegistry {
             .filter(|p| p.key.is_some())
             .cloned()
             .collect()
+    }
+
+    /// List all models across all providers
+    ///
+    /// # Arguments
+    /// * `include_deprecated` - If false, filters out deprecated models
+    pub async fn list_all_models(&self, include_deprecated: bool) -> Vec<(String, Model)> {
+        let providers = self.providers.read().await;
+        let mut models = Vec::new();
+
+        for provider in providers.values() {
+            for (model_id, model) in &provider.models {
+                // Skip deprecated models if requested
+                if !include_deprecated && matches!(model.status, ModelStatus::Deprecated) {
+                    continue;
+                }
+
+                models.push((format!("{}/{}", provider.id, model_id), model.clone()));
+            }
+        }
+
+        // Sort models by status (Active first, then Beta, Alpha, Deprecated)
+        models.sort_by(|(_, a), (_, b)| {
+            let a_priority = match a.status {
+                ModelStatus::Active => 0,
+                ModelStatus::Beta => 1,
+                ModelStatus::Alpha => 2,
+                ModelStatus::Deprecated => 3,
+            };
+            let b_priority = match b.status {
+                ModelStatus::Active => 0,
+                ModelStatus::Beta => 1,
+                ModelStatus::Alpha => 2,
+                ModelStatus::Deprecated => 3,
+            };
+
+            a_priority
+                .cmp(&b_priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        models
     }
 
     /// Get the default model

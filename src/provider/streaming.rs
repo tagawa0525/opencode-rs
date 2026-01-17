@@ -341,7 +341,7 @@ impl StreamingClient {
                             .text()
                             .await
                             .unwrap_or_else(|_| "Unknown error".to_string());
-                        
+
                         // Enhanced error message for GitHub Copilot
                         let error = if error_text.contains("The requested model is not supported") {
                             format!("{}\n\nMake sure the model is enabled in your copilot settings: https://github.com/settings/copilot/features", error_text)
@@ -350,7 +350,7 @@ impl StreamingClient {
                         } else {
                             error_text
                         };
-                        
+
                         let _ = tx.send(StreamEvent::Error(error)).await;
                         return;
                     }

@@ -64,9 +64,7 @@ pub struct ModelsDevModel {
 #[serde(untagged)]
 pub enum InterleavedValue {
     Bool(bool),
-    Object {
-        field: String,
-    },
+    Object { field: String },
 }
 
 impl Default for InterleavedValue {
@@ -133,8 +131,8 @@ pub struct ModelsDevProvider {
 
 /// Get the cache file path
 fn get_cache_path() -> Result<PathBuf> {
-    let cache_dir = dirs::cache_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+    let cache_dir =
+        dirs::cache_dir().ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
     let opencode_cache = cache_dir.join("opencode");
     fs::create_dir_all(&opencode_cache)?;
     Ok(opencode_cache.join(CACHE_FILENAME))
@@ -145,19 +143,19 @@ fn is_cache_fresh() -> bool {
     let Ok(cache_path) = get_cache_path() else {
         return false;
     };
-    
+
     let Ok(metadata) = fs::metadata(&cache_path) else {
         return false;
     };
-    
+
     let Ok(modified) = metadata.modified() else {
         return false;
     };
-    
+
     let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
         return false;
     };
-    
+
     elapsed < CACHE_MAX_AGE
 }
 
@@ -166,20 +164,20 @@ async fn fetch_from_api() -> Result<HashMap<String, ModelsDevProvider>> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
-    
+
     let response = client
         .get(MODELS_DEV_API)
         .header("User-Agent", "opencode-rs/0.1.0")
         .send()
         .await?;
-    
+
     if !response.status().is_success() {
         anyhow::bail!("Failed to fetch models.dev: HTTP {}", response.status());
     }
-    
+
     let text = response.text().await?;
     let providers: HashMap<String, ModelsDevProvider> = serde_json::from_str(&text)?;
-    
+
     Ok(providers)
 }
 
@@ -223,14 +221,14 @@ pub async fn get() -> Result<HashMap<String, ModelsDevProvider>> {
     if is_fetch_disabled() {
         return load_from_cache();
     }
-    
+
     // If cache is fresh, use it
     if is_cache_fresh() {
         if let Ok(cached) = load_from_cache() {
             return Ok(cached);
         }
     }
-    
+
     // Try to fetch from API
     match fetch_from_api().await {
         Ok(providers) => {
@@ -251,7 +249,7 @@ pub async fn refresh() {
     if is_fetch_disabled() {
         return;
     }
-    
+
     if let Ok(providers) = fetch_from_api().await {
         let _ = save_to_cache(&providers);
         tracing::info!("Successfully refreshed models cache from models.dev");
@@ -269,7 +267,7 @@ pub fn to_model(provider: &ModelsDevProvider, model: &ModelsDevModel) -> Model {
         _ if model.experimental => ModelStatus::Beta,
         _ => ModelStatus::Active,
     };
-    
+
     let interleaved = match &model.interleaved {
         Some(InterleavedValue::Bool(b)) => InterleavedSupport::Bool(*b),
         Some(InterleavedValue::Object { field }) => InterleavedSupport::Field {
@@ -277,9 +275,9 @@ pub fn to_model(provider: &ModelsDevProvider, model: &ModelsDevModel) -> Model {
         },
         None => InterleavedSupport::Bool(false),
     };
-    
+
     let modalities = model.modalities.as_ref();
-    
+
     Model {
         id: model.id.clone(),
         provider_id: provider.id.clone(),
@@ -288,7 +286,9 @@ pub fn to_model(provider: &ModelsDevProvider, model: &ModelsDevModel) -> Model {
         api: ModelApi {
             id: model.id.clone(),
             url: provider.api.clone(),
-            npm: model.provider.as_ref()
+            npm: model
+                .provider
+                .as_ref()
                 .map(|p| p.npm.clone())
                 .or_else(|| provider.npm.clone()),
         },
@@ -298,18 +298,38 @@ pub fn to_model(provider: &ModelsDevProvider, model: &ModelsDevModel) -> Model {
             attachment: model.attachment,
             toolcall: model.tool_call,
             input: Modalities {
-                text: modalities.map(|m| m.input.contains(&"text".to_string())).unwrap_or(true),
-                audio: modalities.map(|m| m.input.contains(&"audio".to_string())).unwrap_or(false),
-                image: modalities.map(|m| m.input.contains(&"image".to_string())).unwrap_or(false),
-                video: modalities.map(|m| m.input.contains(&"video".to_string())).unwrap_or(false),
-                pdf: modalities.map(|m| m.input.contains(&"pdf".to_string())).unwrap_or(false),
+                text: modalities
+                    .map(|m| m.input.contains(&"text".to_string()))
+                    .unwrap_or(true),
+                audio: modalities
+                    .map(|m| m.input.contains(&"audio".to_string()))
+                    .unwrap_or(false),
+                image: modalities
+                    .map(|m| m.input.contains(&"image".to_string()))
+                    .unwrap_or(false),
+                video: modalities
+                    .map(|m| m.input.contains(&"video".to_string()))
+                    .unwrap_or(false),
+                pdf: modalities
+                    .map(|m| m.input.contains(&"pdf".to_string()))
+                    .unwrap_or(false),
             },
             output: Modalities {
-                text: modalities.map(|m| m.output.contains(&"text".to_string())).unwrap_or(true),
-                audio: modalities.map(|m| m.output.contains(&"audio".to_string())).unwrap_or(false),
-                image: modalities.map(|m| m.output.contains(&"image".to_string())).unwrap_or(false),
-                video: modalities.map(|m| m.output.contains(&"video".to_string())).unwrap_or(false),
-                pdf: modalities.map(|m| m.output.contains(&"pdf".to_string())).unwrap_or(false),
+                text: modalities
+                    .map(|m| m.output.contains(&"text".to_string()))
+                    .unwrap_or(true),
+                audio: modalities
+                    .map(|m| m.output.contains(&"audio".to_string()))
+                    .unwrap_or(false),
+                image: modalities
+                    .map(|m| m.output.contains(&"image".to_string()))
+                    .unwrap_or(false),
+                video: modalities
+                    .map(|m| m.output.contains(&"video".to_string()))
+                    .unwrap_or(false),
+                pdf: modalities
+                    .map(|m| m.output.contains(&"pdf".to_string()))
+                    .unwrap_or(false),
             },
             interleaved,
         },

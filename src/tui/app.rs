@@ -225,12 +225,12 @@ impl DialogState {
 
     pub fn update_filter(&mut self) {
         use fuzzy_matcher::FuzzyMatcher;
-        
+
         if self.search_query.is_empty() {
             self.filtered_indices = (0..self.items.len()).collect();
         } else {
             let matcher = fuzzy_matcher::skim::SkimMatcherV2::default();
-            
+
             // Score each item and filter
             let mut scored_items: Vec<(usize, i64)> = self
                 .items
@@ -244,20 +244,20 @@ impl DialogState {
                         .description
                         .as_ref()
                         .and_then(|d| matcher.fuzzy_match(d, &self.search_query));
-                    
+
                     // Use the best score
                     let best_score = [label_score, id_score, desc_score]
                         .into_iter()
                         .flatten()
                         .max()?;
-                    
+
                     Some((idx, best_score))
                 })
                 .collect();
-            
+
             // Sort by score (descending)
             scored_items.sort_by(|a, b| b.1.cmp(&a.1));
-            
+
             self.filtered_indices = scored_items.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected_index = 0;
@@ -343,11 +343,25 @@ impl App {
         let mut items = Vec::new();
 
         // Only show models from available providers (with API keys)
+        // By default, hide deprecated models (users can show them with a toggle)
         for provider in &self.available_providers {
             for (model_id, model) in &provider.models {
+                // Skip deprecated models by default
+                if matches!(model.status, crate::provider::ModelStatus::Deprecated) {
+                    continue;
+                }
+
+                // Add status indicator to the label
+                let status_badge = match model.status {
+                    crate::provider::ModelStatus::Alpha => " [ALPHA]",
+                    crate::provider::ModelStatus::Beta => " [BETA]",
+                    crate::provider::ModelStatus::Active => "",
+                    crate::provider::ModelStatus::Deprecated => " [DEPRECATED]",
+                };
+
                 items.push(SelectItem {
                     id: format!("{}/{}", provider.id, model_id),
-                    label: model.name.clone(),
+                    label: format!("{}{}", model.name, status_badge),
                     description: Some(format!("{} - {}", provider.name, model_id)),
                     provider_id: Some(provider.id.clone()),
                 });
@@ -360,7 +374,11 @@ impl App {
             return;
         }
 
-        let dialog = DialogState::new(DialogType::ModelSelector, "Select Model").with_items(items);
+        let dialog = DialogState::new(
+            DialogType::ModelSelector,
+            "Select Model (deprecated models hidden)",
+        )
+        .with_items(items);
         self.dialog = Some(dialog);
     }
 

@@ -166,7 +166,7 @@ fn render_select_dialog(
     let match_count = dialog.filtered_indices.len();
     let total_count = dialog.items.len();
     let count_text = format!(" {}/{}", match_count, total_count);
-    
+
     let search_text = if dialog.search_query.is_empty() {
         vec![
             Span::styled("> ", Style::default().fg(theme.accent)),
@@ -504,8 +504,7 @@ fn render_autocomplete(
     } else {
         format!("> /{} - {} matches", autocomplete.filter, match_count)
     };
-    let search_para = Paragraph::new(search_info)
-        .style(Style::default().fg(theme.dim));
+    let search_para = Paragraph::new(search_info).style(Style::default().fg(theme.dim));
     frame.render_widget(search_para, chunks[0]);
 
     // Render items
