@@ -4,9 +4,11 @@
 //! message management, and session lifecycle.
 
 mod message;
+mod parts;
 mod types;
 
 pub use message::*;
+pub use parts::*;
 #[allow(unused_imports)]
 pub use types::*;
 
@@ -56,6 +58,10 @@ pub struct Session {
     /// Permission ruleset for this session
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<serde_json::Value>,
+
+    /// Current model for this session (cached, source of truth is message metadata)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +161,7 @@ impl Session {
             share: None,
             summary: None,
             permission: options.permission,
+            model: None, // Will be set when first prompt is sent
         };
 
         // Persist to storage
@@ -279,6 +286,41 @@ impl Session {
     /// Get all messages for this session
     pub async fn messages(&self) -> Result<Vec<Message>> {
         Message::list(&self.id).await
+    }
+
+    /// Get the current model for this session
+    /// Priority: session.model > last message model
+    pub async fn get_model(&self) -> Option<ModelRef> {
+        // 1. Check in-memory session model cache
+        if let Some(ref model) = self.model {
+            return Some(model.clone());
+        }
+
+        // 2. Fall back to last user message model (source of truth)
+        self.last_model().await
+    }
+
+    /// Get the last model used in message history
+    async fn last_model(&self) -> Option<ModelRef> {
+        let messages = match self.messages().await {
+            Ok(msgs) => msgs,
+            Err(_) => return None,
+        };
+
+        // Iterate in reverse to find the most recent user message with a model
+        for message in messages.iter().rev() {
+            if let Message::User(user_msg) = message {
+                return Some(user_msg.model.clone());
+            }
+        }
+
+        None
+    }
+
+    /// Set the model for this session and persist
+    pub async fn set_model(&mut self, project_id: &str, model: ModelRef) -> Result<()> {
+        self.model = Some(model);
+        self.update(project_id, |_| {}).await
     }
 }
 

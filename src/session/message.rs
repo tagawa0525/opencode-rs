@@ -1,14 +1,16 @@
 //! Message types for session conversations.
 //!
-//! This module defines the message structure, including user messages,
-//! assistant messages, and various part types (text, tool calls, etc.).
+//! This module defines the message structure, including user messages
+//! and assistant messages. Part types are defined in parts.rs.
 
 use crate::bus::{self, Event};
 use crate::id::{self, IdPrefix};
 use crate::storage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+// Re-export Part types from parts module
+pub use super::parts::*;
 
 /// Message role
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +23,7 @@ pub enum MessageRole {
 /// Base message information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role")]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     #[serde(rename = "user")]
     User(UserMessage),
@@ -156,9 +159,9 @@ pub struct UserMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<HashMap<String, bool>>,
+    pub tools: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub variant: Option<String>,
+    pub variant: Option<u32>,
 }
 
 /// Assistant message
@@ -171,13 +174,13 @@ pub struct AssistantMessage {
     pub agent: String,
     pub provider_id: String,
     pub model_id: String,
-    #[deprecated]
+    #[deprecated(note = "Use agent instead")]
     pub mode: String,
     pub path: MessagePath,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<MessageError>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<bool>,
+    pub summary: Option<String>,
     pub cost: f64,
     pub tokens: TokenUsage,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,40 +213,42 @@ pub struct MessagePath {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSummary {
+    /// Text content summary
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub text: Option<String>,
+    /// Files attached
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<String>,
-    #[serde(default)]
-    pub diffs: Vec<super::FileDiff>,
+    pub files: Option<u32>,
 }
 
+/// Message errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name")]
+#[allow(clippy::enum_variant_names)]
 pub enum MessageError {
     #[serde(rename = "ProviderAuthError")]
     AuthError {
         provider_id: String,
         message: String,
     },
+    #[serde(rename = "APIError")]
+    ApiError {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status_code: Option<u16>,
+        is_retryable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_headers: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_body: Option<String>,
+    },
     #[serde(rename = "MessageOutputLengthError")]
     OutputLengthError {},
     #[serde(rename = "MessageAbortedError")]
     AbortedError { message: String },
-    #[serde(rename = "APIError")]
-    ApiError {
-        message: String,
-        status_code: Option<u16>,
-        is_retryable: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        response_headers: Option<HashMap<String, String>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        response_body: Option<String>,
-    },
-    #[serde(rename = "UnknownError")]
-    Unknown { message: String },
 }
 
+/// Token usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenUsage {
     pub input: u64,
@@ -258,7 +263,7 @@ pub struct CacheUsage {
     pub write: u64,
 }
 
-/// Message with parts
+/// Message with its parts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageWithParts {
     pub message: Message,
@@ -270,6 +275,7 @@ pub struct MessageWithParts {
 pub struct MessageUpdated {
     pub message: Message,
 }
+
 impl Event for MessageUpdated {}
 
 #[derive(Debug, Clone)]
@@ -279,392 +285,205 @@ pub struct MessageRemoved {
 }
 impl Event for MessageRemoved {}
 
-/// Message part types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum Part {
-    #[serde(rename = "text")]
-    Text(TextPart),
-    #[serde(rename = "reasoning")]
-    Reasoning(ReasoningPart),
-    #[serde(rename = "file")]
-    File(FilePart),
-    #[serde(rename = "tool")]
-    Tool(ToolPart),
-    #[serde(rename = "step-start")]
-    StepStart(StepStartPart),
-    #[serde(rename = "step-finish")]
-    StepFinish(StepFinishPart),
-    #[serde(rename = "subtask")]
-    Subtask(SubtaskPart),
-    #[serde(rename = "compaction")]
-    Compaction(CompactionPart),
-    #[serde(rename = "retry")]
-    Retry(RetryPart),
-    #[serde(rename = "agent")]
-    Agent(AgentPart),
-    #[serde(rename = "snapshot")]
-    Snapshot(SnapshotPart),
-    #[serde(rename = "patch")]
-    Patch(PatchPart),
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl Part {
-    pub fn id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.id,
-            Part::Reasoning(p) => &p.base.id,
-            Part::File(p) => &p.base.id,
-            Part::Tool(p) => &p.base.id,
-            Part::StepStart(p) => &p.base.id,
-            Part::StepFinish(p) => &p.base.id,
-            Part::Subtask(p) => &p.base.id,
-            Part::Compaction(p) => &p.base.id,
-            Part::Retry(p) => &p.base.id,
-            Part::Agent(p) => &p.base.id,
-            Part::Snapshot(p) => &p.base.id,
-            Part::Patch(p) => &p.base.id,
+    mod message_role {
+        use super::*;
+
+        #[test]
+        fn test_serialize_user() {
+            let role = MessageRole::User;
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, r#""user""#);
+        }
+
+        #[test]
+        fn test_serialize_assistant() {
+            let role = MessageRole::Assistant;
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, r#""assistant""#);
+        }
+
+        #[test]
+        fn test_deserialize_user() {
+            let role: MessageRole = serde_json::from_str(r#""user""#).unwrap();
+            assert_eq!(role, MessageRole::User);
+        }
+
+        #[test]
+        fn test_deserialize_assistant() {
+            let role: MessageRole = serde_json::from_str(r#""assistant""#).unwrap();
+            assert_eq!(role, MessageRole::Assistant);
         }
     }
 
-    pub fn message_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.message_id,
-            Part::Reasoning(p) => &p.base.message_id,
-            Part::File(p) => &p.base.message_id,
-            Part::Tool(p) => &p.base.message_id,
-            Part::StepStart(p) => &p.base.message_id,
-            Part::StepFinish(p) => &p.base.message_id,
-            Part::Subtask(p) => &p.base.message_id,
-            Part::Compaction(p) => &p.base.message_id,
-            Part::Retry(p) => &p.base.message_id,
-            Part::Agent(p) => &p.base.message_id,
-            Part::Snapshot(p) => &p.base.message_id,
-            Part::Patch(p) => &p.base.message_id,
+    mod message {
+        use super::*;
+
+        #[test]
+        fn test_user_message_creation() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let msg = Message::user("session_123", "default", model);
+
+            assert!(msg.id.starts_with("msg_"));
+            assert_eq!(msg.session_id, "session_123");
+            assert_eq!(msg.agent, "default");
+            assert_eq!(msg.model.provider_id, "anthropic");
+        }
+
+        #[test]
+        fn test_assistant_message_creation() {
+            let path = MessagePath {
+                cwd: "/home/user".to_string(),
+                root: "/home/user/project".to_string(),
+            };
+            let msg = Message::assistant(
+                "session_123",
+                "msg_parent",
+                "default",
+                "anthropic",
+                "claude-3-5-sonnet",
+                path,
+            );
+
+            assert!(msg.id.starts_with("msg_"));
+            assert_eq!(msg.session_id, "session_123");
+            assert_eq!(msg.parent_id, "msg_parent");
+            assert_eq!(msg.provider_id, "anthropic");
+            assert_eq!(msg.model_id, "claude-3-5-sonnet");
+        }
+
+        #[test]
+        fn test_message_id() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model.clone()));
+
+            let path = MessagePath {
+                cwd: "/home/user".to_string(),
+                root: "/home/user/project".to_string(),
+            };
+            let assistant_msg = Message::Assistant(Message::assistant(
+                "session_123",
+                "msg_parent",
+                "default",
+                "anthropic",
+                "claude-3-5-sonnet",
+                path,
+            ));
+
+            assert!(user_msg.id().starts_with("msg_"));
+            assert!(assistant_msg.id().starts_with("msg_"));
+        }
+
+        #[test]
+        fn test_message_role() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model));
+
+            assert_eq!(user_msg.role(), MessageRole::User);
+        }
+
+        #[test]
+        fn test_message_serialize_deserialize() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model));
+
+            let json = serde_json::to_string(&user_msg).unwrap();
+            let parsed: Message = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(parsed.id(), user_msg.id());
+            assert_eq!(parsed.session_id(), user_msg.session_id());
         }
     }
 
-    pub fn session_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.session_id,
-            Part::Reasoning(p) => &p.base.session_id,
-            Part::File(p) => &p.base.session_id,
-            Part::Tool(p) => &p.base.session_id,
-            Part::StepStart(p) => &p.base.session_id,
-            Part::StepFinish(p) => &p.base.session_id,
-            Part::Subtask(p) => &p.base.session_id,
-            Part::Compaction(p) => &p.base.session_id,
-            Part::Retry(p) => &p.base.session_id,
-            Part::Agent(p) => &p.base.session_id,
-            Part::Snapshot(p) => &p.base.session_id,
-            Part::Patch(p) => &p.base.session_id,
+    mod message_error {
+        use super::*;
+
+        #[test]
+        fn test_auth_error_serialize() {
+            let error = MessageError::AuthError {
+                provider_id: "anthropic".to_string(),
+                message: "Invalid API key".to_string(),
+            };
+
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"ProviderAuthError""#));
+        }
+
+        #[test]
+        fn test_api_error_serialize() {
+            let error = MessageError::ApiError {
+                message: "Rate limit exceeded".to_string(),
+                status_code: Some(429),
+                is_retryable: true,
+                response_headers: None,
+                response_body: None,
+            };
+
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"APIError""#));
+            assert!(json.contains(r#""status_code":429"#));
+        }
+
+        #[test]
+        fn test_output_length_error_serialize() {
+            let error = MessageError::OutputLengthError {};
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"MessageOutputLengthError""#));
+        }
+
+        #[test]
+        fn test_aborted_error_serialize() {
+            let error = MessageError::AbortedError {
+                message: "User cancelled".to_string(),
+            };
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"MessageAbortedError""#));
         }
     }
 
-    /// List all parts for a message
-    pub async fn list(message_id: &str) -> Result<Vec<Part>> {
-        let keys = storage::global().list(&["part", message_id]).await?;
-        let mut parts = Vec::new();
+    mod token_usage {
+        use super::*;
 
-        for key in keys {
-            if let Some(part) = storage::global()
-                .read::<Part>(&key.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                .await?
-            {
-                parts.push(part);
-            }
+        #[test]
+        fn test_default() {
+            let usage = TokenUsage::default();
+            assert_eq!(usage.input, 0);
+            assert_eq!(usage.output, 0);
+            assert_eq!(usage.reasoning, 0);
+            assert_eq!(usage.cache.read, 0);
+            assert_eq!(usage.cache.write, 0);
         }
 
-        // Sort by ID (chronological order)
-        parts.sort_by(|a, b| a.id().cmp(b.id()));
+        #[test]
+        fn test_serialize_deserialize() {
+            let usage = TokenUsage {
+                input: 100,
+                output: 50,
+                reasoning: 10,
+                cache: CacheUsage { read: 5, write: 3 },
+            };
 
-        Ok(parts)
-    }
+            let json = serde_json::to_string(&usage).unwrap();
+            let parsed: TokenUsage = serde_json::from_str(&json).unwrap();
 
-    /// Save the part
-    pub async fn save(&self) -> Result<()> {
-        storage::global()
-            .write(&["part", self.message_id(), self.id()], self)
-            .await
-            .context("Failed to save part")?;
-
-        bus::publish(PartUpdated { part: self.clone() }).await;
-
-        Ok(())
-    }
-
-    /// Create a new text part
-    pub fn text(session_id: &str, message_id: &str, text: String) -> Self {
-        Part::Text(TextPart {
-            base: PartBase::new(session_id, message_id),
-            text,
-            synthetic: None,
-            ignored: None,
-            time: None,
-            metadata: None,
-        })
-    }
-
-    /// Create a new tool part
-    pub fn tool(session_id: &str, message_id: &str, tool: String, call_id: String) -> Self {
-        Part::Tool(ToolPart {
-            base: PartBase::new(session_id, message_id),
-            tool,
-            call_id,
-            state: ToolState::Pending(ToolStatePending {
-                input: serde_json::Value::Null,
-                raw: String::new(),
-            }),
-            metadata: None,
-        })
-    }
-}
-
-/// Base fields for all parts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartBase {
-    pub id: String,
-    pub session_id: String,
-    pub message_id: String,
-}
-
-impl PartBase {
-    pub fn new(session_id: &str, message_id: &str) -> Self {
-        Self {
-            id: id::ascending(IdPrefix::Part),
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
+            assert_eq!(parsed.input, 100);
+            assert_eq!(parsed.output, 50);
+            assert_eq!(parsed.cache.read, 5);
         }
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub synthetic: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ignored: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time: Option<PartTime>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReasoningPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub text: String,
-    pub time: PartTime,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilePart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub mime: String,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filename: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<FileSource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum FileSource {
-    #[serde(rename = "file")]
-    File { path: String, text: FileSourceText },
-    #[serde(rename = "symbol")]
-    Symbol {
-        path: String,
-        text: FileSourceText,
-        name: String,
-        kind: i32,
-    },
-    #[serde(rename = "resource")]
-    Resource {
-        client_name: String,
-        uri: String,
-        text: FileSourceText,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileSourceText {
-    pub value: String,
-    pub start: i32,
-    pub end: i32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub tool: String,
-    pub call_id: String,
-    pub state: ToolState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "status")]
-pub enum ToolState {
-    #[serde(rename = "pending")]
-    Pending(ToolStatePending),
-    #[serde(rename = "running")]
-    Running(ToolStateRunning),
-    #[serde(rename = "completed")]
-    Completed(ToolStateCompleted),
-    #[serde(rename = "error")]
-    Error(ToolStateError),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolStatePending {
-    pub input: serde_json::Value,
-    pub raw: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolStateRunning {
-    pub input: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-    pub time: ToolTimeStart,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolStateCompleted {
-    pub input: serde_json::Value,
-    pub output: String,
-    pub title: String,
-    pub metadata: HashMap<String, serde_json::Value>,
-    pub time: ToolTimeComplete,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachments: Option<Vec<FilePart>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolStateError {
-    pub input: serde_json::Value,
-    pub error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-    pub time: ToolTimeComplete,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolTimeStart {
-    pub start: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolTimeComplete {
-    pub start: i64,
-    pub end: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compacted: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StepStartPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StepFinishPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub reason: String,
-    pub cost: f64,
-    pub tokens: TokenUsage,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubtaskPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub prompt: String,
-    pub description: String,
-    pub agent: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub auto: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub attempt: u32,
-    pub error: MessageError,
-    pub time: MessageTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<FileSourceText>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub snapshot: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatchPart {
-    #[serde(flatten)]
-    pub base: PartBase,
-    pub hash: String,
-    pub files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartTime {
-    pub start: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end: Option<i64>,
-}
-
-/// Part events
-#[derive(Debug, Clone)]
-pub struct PartUpdated {
-    pub part: Part,
-}
-impl Event for PartUpdated {}
-
-#[derive(Debug, Clone)]
-pub struct PartRemoved {
-    pub session_id: String,
-    pub message_id: String,
-    pub part_id: String,
-}
-impl Event for PartRemoved {}

@@ -1,86 +1,15 @@
 //! LLM streaming implementation for various providers.
+//!
+//! This module provides the `StreamingClient` for streaming responses from
+//! different LLM providers (Anthropic, OpenAI, GitHub Copilot).
 
 use anyhow::Result;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-/// Stream event from LLM
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    /// Text content delta
-    TextDelta(String),
-    /// Reasoning/thinking content delta
-    ReasoningDelta(String),
-    /// Tool call started
-    ToolCallStart { id: String, name: String },
-    /// Tool call argument delta
-    ToolCallDelta { id: String, arguments_delta: String },
-    /// Tool call completed
-    ToolCallEnd { id: String },
-    /// Usage information
-    Usage {
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_read_tokens: u64,
-        cache_write_tokens: u64,
-    },
-    /// Stream finished
-    Done { finish_reason: String },
-    /// Error occurred
-    Error(String),
-}
-
-/// Message format for API requests
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: ChatContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ChatContent {
-    Text(String),
-    Parts(Vec<ContentPart>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ContentPart {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageUrl },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageUrl {
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-/// Tool definition for API requests
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
+// Re-export types from stream_types for convenience
+pub use super::parsers::{parse_anthropic_sse, parse_openai_sse};
+pub use super::stream_types::*;
 
 /// Streaming client for LLM APIs
 pub struct StreamingClient {
@@ -214,10 +143,13 @@ impl StreamingClient {
             })
             .collect();
 
+        // Convert messages to OpenAI format (handles tool results properly)
+        let openai_messages = convert_messages_to_openai(messages);
+
         let request_body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": openai_messages,
             "tools": openai_tools,
             "stream": true,
             "stream_options": {
@@ -311,10 +243,13 @@ impl StreamingClient {
             })
             .collect();
 
+        // Convert messages to OpenAI format (handles tool results properly)
+        let openai_messages = convert_messages_to_openai(messages);
+
         let request_body = serde_json::json!({
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            "messages": openai_messages,
             "tools": openai_tools,
             "stream": true,
         });
@@ -397,193 +332,4 @@ impl Default for StreamingClient {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Parse Anthropic SSE event
-fn parse_anthropic_sse(event: &str) -> Option<StreamEvent> {
-    let mut event_type = None;
-    let mut data = None;
-
-    for line in event.lines() {
-        if let Some(t) = line.strip_prefix("event: ") {
-            event_type = Some(t.to_string());
-        } else if let Some(d) = line.strip_prefix("data: ") {
-            data = Some(d.to_string());
-        }
-    }
-
-    let event_type = event_type?;
-    let data = data?;
-
-    match event_type.as_str() {
-        "content_block_delta" => {
-            let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
-            let delta = parsed.get("delta")?;
-
-            match delta.get("type")?.as_str()? {
-                "text_delta" => {
-                    let text = delta.get("text")?.as_str()?.to_string();
-                    Some(StreamEvent::TextDelta(text))
-                }
-                "thinking_delta" => {
-                    let text = delta.get("thinking")?.as_str()?.to_string();
-                    Some(StreamEvent::ReasoningDelta(text))
-                }
-                "input_json_delta" => {
-                    let partial = delta.get("partial_json")?.as_str()?.to_string();
-                    let index = parsed.get("index")?.as_u64()? as usize;
-                    Some(StreamEvent::ToolCallDelta {
-                        id: format!("tool_{}", index),
-                        arguments_delta: partial,
-                    })
-                }
-                _ => None,
-            }
-        }
-        "content_block_start" => {
-            let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
-            let content_block = parsed.get("content_block")?;
-
-            if content_block.get("type")?.as_str()? == "tool_use" {
-                let id = content_block.get("id")?.as_str()?.to_string();
-                let name = content_block.get("name")?.as_str()?.to_string();
-                Some(StreamEvent::ToolCallStart { id, name })
-            } else {
-                None
-            }
-        }
-        "content_block_stop" => {
-            let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
-            let index = parsed.get("index")?.as_u64()? as usize;
-            Some(StreamEvent::ToolCallEnd {
-                id: format!("tool_{}", index),
-            })
-        }
-        "message_delta" => {
-            let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
-
-            if let Some(usage) = parsed.get("usage") {
-                return Some(StreamEvent::Usage {
-                    input_tokens: usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    output_tokens: usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    cache_read_tokens: usage
-                        .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    cache_write_tokens: usage
-                        .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                });
-            }
-
-            let delta = parsed.get("delta")?;
-            delta
-                .get("stop_reason")
-                .and_then(|v| v.as_str())
-                .map(|stop_reason| StreamEvent::Done {
-                    finish_reason: stop_reason.to_string(),
-                })
-        }
-        "message_stop" => Some(StreamEvent::Done {
-            finish_reason: "stop".to_string(),
-        }),
-        "error" => {
-            let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
-            let message = parsed
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
-            Some(StreamEvent::Error(message))
-        }
-        _ => None,
-    }
-}
-
-/// Parse OpenAI SSE event
-fn parse_openai_sse(line: &str) -> Option<StreamEvent> {
-    let data = line.strip_prefix("data: ")?;
-
-    if data == "[DONE]" {
-        return Some(StreamEvent::Done {
-            finish_reason: "stop".to_string(),
-        });
-    }
-
-    let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-
-    // Check for usage
-    if let Some(usage) = parsed.get("usage") {
-        return Some(StreamEvent::Usage {
-            input_tokens: usage
-                .get("prompt_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            output_tokens: usage
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            cache_read_tokens: usage
-                .get("prompt_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            cache_write_tokens: 0,
-        });
-    }
-
-    let choices = parsed.get("choices")?.as_array()?;
-    let choice = choices.first()?;
-    let delta = choice.get("delta")?;
-
-    // Check for finish reason
-    if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-        if finish_reason != "null" {
-            return Some(StreamEvent::Done {
-                finish_reason: finish_reason.to_string(),
-            });
-        }
-    }
-
-    // Check for content
-    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
-        return Some(StreamEvent::TextDelta(content.to_string()));
-    }
-
-    // Check for tool calls
-    if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-        for tool_call in tool_calls {
-            let index = tool_call.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
-            let id = tool_call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("call_{}", index));
-
-            if let Some(function) = tool_call.get("function") {
-                if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                    return Some(StreamEvent::ToolCallStart {
-                        id,
-                        name: name.to_string(),
-                    });
-                }
-                if let Some(arguments) = function.get("arguments").and_then(|v| v.as_str()) {
-                    return Some(StreamEvent::ToolCallDelta {
-                        id,
-                        arguments_delta: arguments.to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    None
 }
