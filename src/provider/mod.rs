@@ -4,9 +4,11 @@
 //! and provides a unified interface for model selection and API calls.
 
 mod models;
+mod models_dev;
 mod streaming;
 
 pub use models::*;
+pub use models_dev::*;
 pub use streaming::*;
 
 use crate::config::Config;
@@ -316,7 +318,7 @@ impl ProviderRegistry {
                 env: vec!["GITHUB_COPILOT_TOKEN".to_string()],
                 key: None,
                 options: HashMap::new(),
-                models: Self::copilot_models(),
+                models: Self::copilot_models().await,
             },
         );
 
@@ -585,294 +587,38 @@ impl ProviderRegistry {
         models
     }
 
-    fn copilot_models() -> HashMap<String, Model> {
-        let mut models = HashMap::new();
-
-        models.insert(
-            "gpt-4o".to_string(),
-            Model {
-                id: "gpt-4o".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "GPT-4o (Copilot)".to_string(),
-                family: Some("gpt-4o".to_string()),
-                api: ModelApi {
-                    id: "gpt-4o".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 128000,
-                    input: None,
-                    output: 16384,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: None,
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "claude-3.5-sonnet".to_string(),
-            Model {
-                id: "claude-3.5-sonnet".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "Claude 3.5 Sonnet (Copilot)".to_string(),
-                family: Some("claude-3.5".to_string()),
-                api: ModelApi {
-                    id: "claude-3.5-sonnet".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 8192,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: None,
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "gemini-2.0-flash-001".to_string(),
-            Model {
-                id: "gemini-2.0-flash-001".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "Gemini 2.0 Flash (Copilot)".to_string(),
-                family: Some("gemini-2.0".to_string()),
-                api: ModelApi {
-                    id: "gemini-2.0-flash-001".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: false,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 1000000,
-                    input: None,
-                    output: 8192,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: None,
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "o1".to_string(),
-            Model {
-                id: "o1".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "o1 (Copilot)".to_string(),
-                family: Some("o1".to_string()),
-                api: ModelApi {
-                    id: "o1".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: false,
-                    reasoning: true,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(false),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 100000,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: None,
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "claude-sonnet-4-5-20250929".to_string(),
-            Model {
-                id: "claude-sonnet-4-5-20250929".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "Claude Sonnet 4.5 (Copilot)".to_string(),
-                family: Some("claude-4.5".to_string()),
-                api: ModelApi {
-                    id: "claude-sonnet-4-5-20250929".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: true,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        pdf: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(true),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 16384,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2025-09-29".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models.insert(
-            "claude-opus-4-5-20251124".to_string(),
-            Model {
-                id: "claude-opus-4-5-20251124".to_string(),
-                provider_id: "copilot".to_string(),
-                name: "Claude Opus 4.5 (Copilot)".to_string(),
-                family: Some("claude-4.5".to_string()),
-                api: ModelApi {
-                    id: "claude-opus-4-5-20251124".to_string(),
-                    url: Some("https://api.githubcopilot.com".to_string()),
-                    npm: None,
-                },
-                capabilities: ModelCapabilities {
-                    temperature: true,
-                    reasoning: true,
-                    attachment: true,
-                    toolcall: true,
-                    input: Modalities {
-                        text: true,
-                        image: true,
-                        pdf: true,
-                        ..Default::default()
-                    },
-                    output: Modalities {
-                        text: true,
-                        ..Default::default()
-                    },
-                    interleaved: InterleavedSupport::Bool(true),
-                },
-                cost: ModelCost {
-                    input: 0.0,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-                limit: ModelLimit {
-                    context: 200000,
-                    input: None,
-                    output: 16384,
-                },
-                status: ModelStatus::Active,
-                options: HashMap::new(),
-                headers: HashMap::new(),
-                release_date: Some("2025-11-24".to_string()),
-                variants: HashMap::new(),
-            },
-        );
-
-        models
+    async fn copilot_models() -> HashMap<String, Model> {
+        // Try to load models dynamically from models.dev API
+        // Fall back to empty HashMap if fetch is disabled or fails
+        match models_dev::get().await {
+            Ok(providers) => {
+                // Get the github-copilot or copilot provider from models.dev
+                let provider = providers.get("github-copilot")
+                    .or_else(|| providers.get("copilot"));
+                
+                if let Some(provider) = provider {
+                    tracing::info!(
+                        "Loaded {} GitHub Copilot models from models.dev",
+                        provider.models.len()
+                    );
+                    
+                    // Convert models.dev models to our Model struct
+                    provider
+                        .models
+                        .iter()
+                        .map(|(id, model)| (id.clone(), models_dev::to_model(provider, model)))
+                        .collect()
+                } else {
+                    tracing::warn!("GitHub Copilot provider not found in models.dev, using empty model list");
+                    HashMap::new()
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to load models from models.dev: {}", e);
+                tracing::warn!("GitHub Copilot models unavailable - check network or set models cache");
+                HashMap::new()
+            }
+        }
     }
 
     /// Get a provider by ID

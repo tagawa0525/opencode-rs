@@ -97,6 +97,17 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
                 )
                 .await?
         }
+        "copilot" => {
+            client
+                .stream_copilot(
+                    &api_key,
+                    &model_info.api.id,
+                    messages,
+                    tool_defs,
+                    model_info.limit.output,
+                )
+                .await?
+        }
         _ => {
             anyhow::bail!("Unsupported provider: {}", provider_id);
         }

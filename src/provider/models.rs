@@ -24,8 +24,8 @@ impl ModelRecommendations {
     /// Models recommended for code generation
     pub fn for_coding() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("copilot", "claude-sonnet-4-5-20250929"),
-            ("copilot", "claude-opus-4-5-20251124"),
+            ("copilot", "claude-sonnet-4.5"),
+            ("copilot", "claude-opus-4.5"),
             ("anthropic", "claude-sonnet-4-20250514"),
             ("anthropic", "claude-3-5-sonnet-20241022"),
             ("openai", "gpt-4o"),
@@ -45,8 +45,8 @@ impl ModelRecommendations {
     /// Models with reasoning capabilities
     pub fn with_reasoning() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("copilot", "claude-sonnet-4-5-20250929"),
-            ("copilot", "claude-opus-4-5-20251124"),
+            ("copilot", "claude-sonnet-4.5"),
+            ("copilot", "claude-opus-4.5"),
             ("anthropic", "claude-sonnet-4-20250514"),
             ("openai", "o1"),
             ("openai", "o1-mini"),
@@ -57,8 +57,8 @@ impl ModelRecommendations {
 /// Sort models by preference for display
 pub fn sort_models(models: &mut [Model]) {
     let priority = [
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
+        "claude-sonnet-4.5",
+        "claude-opus-4.5",
         "claude-sonnet-4",
         "gpt-4o",
         "gemini-2.0",
