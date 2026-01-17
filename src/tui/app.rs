@@ -43,6 +43,55 @@ pub enum DialogType {
     OAuthWaiting,
 }
 
+/// Autocomplete state for slash commands
+#[derive(Debug, Clone)]
+pub struct AutocompleteState {
+    /// Available commands to choose from
+    pub items: Vec<CommandItem>,
+    /// Currently selected index
+    pub selected_index: usize,
+    /// The filter text (after the /)
+    pub filter: String,
+}
+
+/// Item in autocomplete list
+#[derive(Debug, Clone)]
+pub struct CommandItem {
+    pub name: String,
+    pub description: String,
+    pub display: String,
+}
+
+impl AutocompleteState {
+    pub fn new(items: Vec<CommandItem>) -> Self {
+        Self {
+            items,
+            selected_index: 0,
+            filter: String::new(),
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        } else {
+            self.selected_index = self.items.len().saturating_sub(1);
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected_index + 1 < self.items.len() {
+            self.selected_index += 1;
+        } else {
+            self.selected_index = 0;
+        }
+    }
+
+    pub fn selected_item(&self) -> Option<&CommandItem> {
+        self.items.get(self.selected_index)
+    }
+}
+
 /// Item for selection dialogs
 #[derive(Debug, Clone)]
 pub struct SelectItem {
@@ -113,6 +162,8 @@ pub struct App {
     pub all_providers: Vec<Provider>,
     /// Slash command registry
     pub command_registry: std::sync::Arc<CommandRegistry>,
+    /// Autocomplete state
+    pub autocomplete: Option<AutocompleteState>,
 }
 
 impl Default for App {
@@ -139,6 +190,7 @@ impl Default for App {
             available_providers: Vec::new(),
             all_providers: Vec::new(),
             command_registry: std::sync::Arc::new(CommandRegistry::new()),
+            autocomplete: None,
         }
     }
 }
@@ -441,6 +493,87 @@ impl App {
         self.dialog = None;
     }
 
+    /// Show autocomplete for slash commands
+    pub async fn show_autocomplete(&mut self, filter: &str) {
+        use fuzzy_matcher::FuzzyMatcher;
+
+        let commands = self.command_registry.list().await;
+        let mut items: Vec<CommandItem> = commands
+            .into_iter()
+            .map(|cmd| CommandItem {
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+                display: format!("/{}", cmd.name),
+            })
+            .collect();
+
+        // Apply fuzzy filtering if there's a filter
+        if !filter.is_empty() {
+            let matcher = fuzzy_matcher::skim::SkimMatcherV2::default();
+            let mut scored_items: Vec<(i64, CommandItem)> = items
+                .into_iter()
+                .filter_map(|item| {
+                    let score = matcher.fuzzy_match(&item.name, filter)?;
+                    Some((score, item))
+                })
+                .collect();
+
+            // Sort by score (descending)
+            scored_items.sort_by(|a, b| b.0.cmp(&a.0));
+            items = scored_items.into_iter().map(|(_, item)| item).collect();
+        }
+
+        // Limit to 10 items
+        items.truncate(10);
+
+        if !items.is_empty() {
+            let mut state = AutocompleteState::new(items);
+            state.filter = filter.to_string();
+            self.autocomplete = Some(state);
+        } else {
+            self.autocomplete = None;
+        }
+    }
+
+    /// Hide autocomplete
+    pub fn hide_autocomplete(&mut self) {
+        self.autocomplete = None;
+    }
+
+    /// Update autocomplete based on current input
+    pub async fn update_autocomplete(&mut self) {
+        // Check if input starts with "/" and cursor is at a position where autocomplete makes sense
+        if self.input.starts_with('/') {
+            // Find the filter text (everything after / until cursor or first space)
+            let cursor_pos = self.cursor_position.min(self.input.len());
+            let input_until_cursor = self.input[..cursor_pos].to_string();
+
+            // If there's a space before cursor, hide autocomplete
+            if input_until_cursor.contains(' ') {
+                self.hide_autocomplete();
+                return;
+            }
+
+            // Extract filter (text after /)
+            let filter = input_until_cursor[1..].to_string(); // Remove leading /
+            self.show_autocomplete(&filter).await;
+        } else {
+            self.hide_autocomplete();
+        }
+    }
+
+    /// Insert selected autocomplete item
+    pub fn insert_autocomplete_selection(&mut self) {
+        if let Some(autocomplete) = &self.autocomplete {
+            if let Some(item) = autocomplete.selected_item() {
+                // Replace the current input with the selected command
+                self.input = format!("/{} ", item.name);
+                self.cursor_position = self.input.len();
+                self.hide_autocomplete();
+            }
+        }
+    }
+
     /// Set the current model
     pub async fn set_model(&mut self, provider_id: &str, model_id: &str) -> Result<()> {
         // Verify the model exists
@@ -680,6 +813,36 @@ async fn run_app(
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                // Handle autocomplete input if autocomplete is open
+                if app.autocomplete.is_some() {
+                    match key.code {
+                        KeyCode::Up => {
+                            if let Some(autocomplete) = &mut app.autocomplete {
+                                autocomplete.move_up();
+                            }
+                            continue;
+                        }
+                        KeyCode::Down => {
+                            if let Some(autocomplete) = &mut app.autocomplete {
+                                autocomplete.move_down();
+                            }
+                            continue;
+                        }
+                        KeyCode::Enter | KeyCode::Tab => {
+                            app.insert_autocomplete_selection();
+                            continue;
+                        }
+                        KeyCode::Esc => {
+                            app.hide_autocomplete();
+                            continue;
+                        }
+                        _ => {
+                            // Let the normal input handling process the key
+                            // but we'll update autocomplete after
+                        }
+                    }
+                }
+
                 // Handle dialog input if dialog is open
                 if app.dialog.is_some() {
                     handle_dialog_input(app, key, event_tx.clone()).await?;
@@ -706,6 +869,22 @@ async fn run_app(
                         }
 
                         if let Some(input) = app.take_input() {
+                            // Check if input is just "/" - show help for slash commands
+                            if input.trim() == "/" {
+                                // Show available slash commands
+                                let commands = app.command_registry.list().await;
+                                let mut help_text = String::from("Available slash commands:\n\n");
+                                for cmd in commands {
+                                    help_text.push_str(&format!(
+                                        "  /{} - {}\n",
+                                        cmd.name, cmd.description
+                                    ));
+                                }
+                                help_text.push_str("\nType /help for more information.");
+                                app.add_message("system", &help_text);
+                                continue;
+                            }
+
                             // Check if this is a slash command
                             if let Some(parsed) = ParsedCommand::parse(&input) {
                                 // Execute slash command
@@ -917,6 +1096,8 @@ async fn run_app(
                         app.status = "Ready".to_string();
                     } else {
                         app.handle_action(action);
+                        // Update autocomplete after input changes
+                        app.update_autocomplete().await;
                     }
                 }
             }

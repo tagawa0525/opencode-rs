@@ -23,6 +23,12 @@ impl ParsedCommand {
         // Split on first whitespace to separate command from arguments
         let mut parts = without_slash.splitn(2, char::is_whitespace);
         let name = parts.next()?.to_string();
+
+        // Reject empty command names
+        if name.is_empty() {
+            return None;
+        }
+
         let args = parts.next().unwrap_or("").trim().to_string();
 
         Some(ParsedCommand { name, args })
@@ -154,6 +160,10 @@ mod tests {
 
         assert_eq!(ParsedCommand::parse("not a command"), None);
         assert_eq!(ParsedCommand::parse(""), None);
+
+        // Test edge cases
+        assert_eq!(ParsedCommand::parse("/"), None); // Just slash should return None
+        assert_eq!(ParsedCommand::parse("/ "), None); // Slash with spaces should return None
     }
 
     #[test]

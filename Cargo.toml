@@ -64,6 +64,7 @@ jsonc-parser = "0.24"
 slugify = "0.1"
 regex = "1.11"
 similar = "2.7"  # for diffs
+fuzzy-matcher = "0.3"  # for fuzzy searching
 
 # Async channels
 async-channel = "2.3"

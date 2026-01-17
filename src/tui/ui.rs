@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, DialogState, DialogType};
+use super::app::{App, AutocompleteState, DialogState, DialogType};
 use super::components::{Header, InputBox, MessageWidget, Spinner, StatusBar};
 
 /// Main UI rendering function
@@ -88,6 +88,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render dialog if open
     if let Some(dialog) = &app.dialog {
         render_dialog(frame, dialog, theme, size);
+    }
+
+    // Render autocomplete if open
+    if let Some(autocomplete) = &app.autocomplete {
+        render_autocomplete(frame, autocomplete, theme, chunks[2]);
     }
 }
 
@@ -440,4 +445,63 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
         current_y += msg_height;
     }
+}
+
+/// Render autocomplete popup
+fn render_autocomplete(
+    frame: &mut Frame,
+    autocomplete: &AutocompleteState,
+    theme: &super::theme::Theme,
+    input_area: Rect,
+) {
+    if autocomplete.items.is_empty() {
+        return;
+    }
+
+    // Calculate autocomplete position (above the input box)
+    let max_items = autocomplete.items.len().min(10);
+    let height = (max_items as u16 + 2).min(12); // +2 for borders
+    let width = input_area.width.min(60);
+    let x = input_area.x;
+    let y = input_area.y.saturating_sub(height);
+
+    let autocomplete_area = Rect::new(x, y, width, height);
+
+    // Clear the area
+    frame.render_widget(Clear, autocomplete_area);
+
+    // Draw border
+    let block = Block::default()
+        .title(" Commands ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.background));
+
+    let inner = block.inner(autocomplete_area);
+    frame.render_widget(block, autocomplete_area);
+
+    // Render items
+    let items: Vec<ListItem> = autocomplete
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let is_selected = i == autocomplete.selected_index;
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.foreground)
+            };
+
+            let content = format!("{:<20} {}", item.display, item.description);
+            ListItem::new(content).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, inner);
 }
