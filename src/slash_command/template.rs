@@ -12,11 +12,12 @@ pub struct TemplateCommand {
 impl TemplateCommand {
     /// Create a new template command from configuration
     pub fn new(name: String, config: CommandConfig) -> Self {
+        let usage = format!("/{}", name);
         Self {
             info: CommandInfo {
                 name,
                 description: config.description.unwrap_or_default(),
-                usage: String::new(), // Will be generated from template
+                usage,
                 aliases: vec![],
                 template: Some(config.template),
                 agent: config.agent,
@@ -43,7 +44,7 @@ impl SlashCommand for TemplateCommand {
     }
 
     fn usage(&self) -> &str {
-        &self.info.name
+        &self.info.usage
     }
 
     async fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandOutput> {

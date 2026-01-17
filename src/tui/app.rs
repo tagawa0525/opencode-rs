@@ -772,7 +772,7 @@ async fn run_app(
                                         if let Some(_agent) = &output.agent {
                                             // TODO: Implement agent switching
                                             app.status =
-                                                format!("Agent switching not yet implemented");
+                                                "Agent switching not yet implemented".to_string();
                                             continue;
                                         }
 
