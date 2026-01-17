@@ -65,8 +65,19 @@ pub enum Action {
 
 /// Convert a key event to an action
 pub fn key_to_action(key: KeyEvent) -> Action {
+    // Try each category of keys in order
+    check_quit_keys(&key)
+        .or_else(|| check_enter_keys(&key))
+        .or_else(|| check_navigation_keys(&key))
+        .or_else(|| check_editing_keys(&key))
+        .or_else(|| check_control_keys(&key))
+        .or_else(|| check_char_keys(&key))
+        .unwrap_or(Action::None)
+}
+
+/// Check for quit key combinations
+fn check_quit_keys(key: &KeyEvent) -> Option<Action> {
     match key {
-        // Quit
         KeyEvent {
             code: KeyCode::Char('c'),
             modifiers: KeyModifiers::CONTROL,
@@ -76,15 +87,20 @@ pub fn key_to_action(key: KeyEvent) -> Action {
             code: KeyCode::Char('d'),
             modifiers: KeyModifiers::CONTROL,
             ..
-        } => Action::Quit,
+        } => Some(Action::Quit),
+        _ => None,
+    }
+}
 
+/// Check for enter key combinations
+fn check_enter_keys(key: &KeyEvent) -> Option<Action> {
+    match key {
         // Submit (Enter)
         KeyEvent {
             code: KeyCode::Enter,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Submit,
-
+        } => Some(Action::Submit),
         // Newline (Shift+Enter, Ctrl+Enter, Alt+Enter)
         KeyEvent {
             code: KeyCode::Enter,
@@ -100,89 +116,105 @@ pub fn key_to_action(key: KeyEvent) -> Action {
             code: KeyCode::Enter,
             modifiers: KeyModifiers::ALT,
             ..
-        } => Action::Newline,
-
+        } => Some(Action::Newline),
         // Cancel (Escape)
         KeyEvent {
             code: KeyCode::Esc, ..
-        } => Action::Cancel,
+        } => Some(Action::Cancel),
+        _ => None,
+    }
+}
 
-        // Navigation
+/// Check for navigation keys
+fn check_navigation_keys(key: &KeyEvent) -> Option<Action> {
+    match key {
         KeyEvent {
             code: KeyCode::Up,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Up,
+        } => Some(Action::Up),
         KeyEvent {
             code: KeyCode::Down,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Down,
+        } => Some(Action::Down),
         KeyEvent {
             code: KeyCode::Left,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Left,
+        } => Some(Action::Left),
         KeyEvent {
             code: KeyCode::Right,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Right,
+        } => Some(Action::Right),
         KeyEvent {
             code: KeyCode::Home,
             ..
-        } => Action::Home,
+        } => Some(Action::Home),
         KeyEvent {
             code: KeyCode::End, ..
-        } => Action::End,
+        } => Some(Action::End),
+        KeyEvent {
+            code: KeyCode::PageUp,
+            ..
+        } => Some(Action::PageUp),
+        KeyEvent {
+            code: KeyCode::PageDown,
+            ..
+        } => Some(Action::PageDown),
+        _ => None,
+    }
+}
 
-        // Editing
+/// Check for editing keys
+fn check_editing_keys(key: &KeyEvent) -> Option<Action> {
+    match key {
         KeyEvent {
             code: KeyCode::Backspace,
             ..
-        } => Action::Backspace,
+        } => Some(Action::Backspace),
         KeyEvent {
             code: KeyCode::Delete,
             ..
-        } => Action::Delete,
+        } => Some(Action::Delete),
+        _ => None,
+    }
+}
 
+/// Check for control key combinations
+fn check_control_keys(key: &KeyEvent) -> Option<Action> {
+    match key {
         // Line navigation shortcuts
         KeyEvent {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::CONTROL,
             ..
-        } => Action::Home,
+        } => Some(Action::Home),
         KeyEvent {
             code: KeyCode::Char('e'),
             modifiers: KeyModifiers::CONTROL,
             ..
-        } => Action::End,
-
+        } => Some(Action::End),
         // Clear input
         KeyEvent {
             code: KeyCode::Char('u'),
             modifiers: KeyModifiers::CONTROL,
             ..
-        } => Action::ClearInput,
-
+        } => Some(Action::ClearInput),
         // Paste
         KeyEvent {
             code: KeyCode::Char('v'),
             modifiers: KeyModifiers::CONTROL,
             ..
-        } => Action::Paste,
+        } => Some(Action::Paste),
+        _ => None,
+    }
+}
 
-        // Scroll
-        KeyEvent {
-            code: KeyCode::PageUp,
-            ..
-        } => Action::PageUp,
-        KeyEvent {
-            code: KeyCode::PageDown,
-            ..
-        } => Action::PageDown,
-
-        // Character input
+/// Check for character input keys
+fn check_char_keys(key: &KeyEvent) -> Option<Action> {
+    match key {
         KeyEvent {
             code: KeyCode::Char(c),
             modifiers: KeyModifiers::NONE,
@@ -192,15 +224,13 @@ pub fn key_to_action(key: KeyEvent) -> Action {
             code: KeyCode::Char(c),
             modifiers: KeyModifiers::SHIFT,
             ..
-        } => Action::Char(c),
-
+        } => Some(Action::Char(*c)),
         KeyEvent {
             code: KeyCode::Tab,
             modifiers: KeyModifiers::NONE,
             ..
-        } => Action::Char('\t'),
-
-        _ => Action::None,
+        } => Some(Action::Char('\t')),
+        _ => None,
     }
 }
 
