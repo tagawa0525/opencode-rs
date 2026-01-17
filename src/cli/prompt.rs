@@ -1,12 +1,12 @@
 //! Prompt command - runs a single prompt without TUI.
 
 use crate::config::Config;
-use crate::provider::{self, StreamEvent};
+use crate::provider::{self, ChatContent, ChatMessage, ContentPart, StreamEvent};
 use crate::session::{CreateSessionOptions, Session};
-use crate::tool;
+use crate::tool::{self, ToolCallTracker, ToolContext};
 use anyhow::Result;
 
-/// Execute a single prompt without TUI
+/// Execute a single prompt without TUI (with agentic loop)
 pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<()> {
     // Load configuration
     let config = Config::load().await?;
@@ -44,12 +44,16 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     // Create a session
     let _session = Session::create(CreateSessionOptions::default()).await?;
 
-    // Create messages
-    let _cwd = std::env::current_dir()?.to_string_lossy().to_string();
+    // Create tool context
+    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+    let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
+        .with_cwd(cwd.clone())
+        .with_root(cwd);
 
-    let messages = vec![provider::ChatMessage {
+    // Initialize conversation history
+    let mut messages: Vec<ChatMessage> = vec![ChatMessage {
         role: "user".to_string(),
-        content: provider::ChatContent::Text(prompt.to_string()),
+        content: ChatContent::Text(prompt.to_string()),
     }];
 
     // Get tool definitions
@@ -66,135 +70,239 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     // Create streaming client
     let client = provider::StreamingClient::new();
 
-    // Stream the response
-    let mut rx = match provider_id.as_str() {
-        "anthropic" => {
-            client
-                .stream_anthropic(
-                    &api_key,
-                    &model_info.api.id,
-                    messages,
-                    None, // system prompt
-                    tool_defs,
-                    model_info.limit.output,
-                )
-                .await?
-        }
-        "openai" => {
-            let base_url = model_info
-                .api
-                .url
-                .as_deref()
-                .unwrap_or("https://api.openai.com/v1");
-            client
-                .stream_openai(
-                    &api_key,
-                    base_url,
-                    &model_info.api.id,
-                    messages,
-                    tool_defs,
-                    model_info.limit.output,
-                )
-                .await?
-        }
-        "copilot" => {
-            client
-                .stream_copilot(
-                    &api_key,
-                    &model_info.api.id,
-                    messages,
-                    tool_defs,
-                    model_info.limit.output,
-                )
-                .await?
-        }
-        _ => {
-            anyhow::bail!("Unsupported provider: {}", provider_id);
-        }
-    };
+    // Agentic loop - continue until LLM finishes without tool calls
+    let mut step = 0;
+    let max_steps = 10; // Prevent infinite loops
 
-    // Collect response
-    let mut response_text = String::new();
-    let mut tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
-    let mut current_tool_args = String::new();
+    loop {
+        step += 1;
+        if step > max_steps {
+            eprintln!("\n[Warning: Maximum agentic loop steps reached]");
+            break;
+        }
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            StreamEvent::TextDelta(text) => {
-                if format == "text" {
-                    print!("{}", text);
+        if format == "text" && step > 1 {
+            eprintln!("\n[Agentic step {}]", step);
+        }
+
+        // Stream the response
+        let mut rx = match provider_id.as_str() {
+            "anthropic" => {
+                client
+                    .stream_anthropic(
+                        &api_key,
+                        &model_info.api.id,
+                        messages.clone(),
+                        None, // system prompt
+                        tool_defs.clone(),
+                        model_info.limit.output,
+                    )
+                    .await?
+            }
+            "openai" => {
+                let base_url = model_info
+                    .api
+                    .url
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                client
+                    .stream_openai(
+                        &api_key,
+                        base_url,
+                        &model_info.api.id,
+                        messages.clone(),
+                        tool_defs.clone(),
+                        model_info.limit.output,
+                    )
+                    .await?
+            }
+            "copilot" => {
+                client
+                    .stream_copilot(
+                        &api_key,
+                        &model_info.api.id,
+                        messages.clone(),
+                        tool_defs.clone(),
+                        model_info.limit.output,
+                    )
+                    .await?
+            }
+            _ => {
+                anyhow::bail!("Unsupported provider: {}", provider_id);
+            }
+        };
+
+        // Collect response
+        let mut response_text = String::new();
+        let mut tool_tracker = ToolCallTracker::new();
+        let mut finish_reason = String::new();
+        let mut assistant_parts: Vec<ContentPart> = Vec::new();
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::TextDelta(text) => {
+                    if format == "text" {
+                        print!("{}", text);
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                    response_text.push_str(&text);
                 }
-                response_text.push_str(&text);
+                StreamEvent::ReasoningDelta(text) => {
+                    if format == "text" {
+                        // Show reasoning in a different style
+                        print!("\x1b[2m{}\x1b[0m", text); // dim
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                }
+                StreamEvent::ToolCallStart { id, name } => {
+                    if format == "text" {
+                        println!("\n[Calling tool: {}]", name);
+                    }
+                    tool_tracker.start_call(id, name);
+                }
+                StreamEvent::ToolCallDelta {
+                    id,
+                    arguments_delta,
+                } => {
+                    tool_tracker.add_arguments(&id, &arguments_delta);
+                }
+                StreamEvent::ToolCallEnd { id } => {
+                    // Tool call is complete, will be executed after stream ends
+                    if format == "text" {
+                        println!("[Tool call {} complete]", id);
+                    }
+                }
+                StreamEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => {
+                    if format == "text" {
+                        eprintln!("[Tokens: {} in, {} out]", input_tokens, output_tokens);
+                    }
+                }
+                StreamEvent::Done {
+                    finish_reason: reason,
+                } => {
+                    finish_reason = reason;
+                }
+                StreamEvent::Error(err) => {
+                    eprintln!("\nError: {}", err);
+                    return Err(anyhow::anyhow!(err));
+                }
+                _ => {}
             }
-            StreamEvent::ReasoningDelta(text) => {
-                if format == "text" {
-                    // Show reasoning in a different style
-                    print!("\x1b[2m{}\x1b[0m", text); // dim
+        }
+
+        // Add assistant response to conversation history
+        if !response_text.is_empty() {
+            assistant_parts.push(ContentPart::Text {
+                text: response_text.clone(),
+            });
+        }
+
+        // Check if there are tool calls to execute
+        let pending_calls = tool_tracker.get_all_calls();
+        
+        if !pending_calls.is_empty() {
+            // Add tool use parts to assistant message
+            for call in &pending_calls {
+                let args: serde_json::Value = serde_json::from_str(&call.arguments)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                
+                assistant_parts.push(ContentPart::ToolUse {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: args,
+                });
+            }
+
+            // Add assistant message with tool calls
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if assistant_parts.len() == 1 {
+                    match &assistant_parts[0] {
+                        ContentPart::Text { text } => ChatContent::Text(text.clone()),
+                        _ => ChatContent::Parts(assistant_parts.clone()),
+                    }
+                } else {
+                    ChatContent::Parts(assistant_parts)
+                },
+            });
+
+            // Execute tools
+            if format == "text" {
+                println!("\n[Executing {} tool(s)...]", pending_calls.len());
+            }
+
+            let tool_results = tool::execute_all_tools(pending_calls, &tool_ctx).await;
+
+            // Show tool results in text format
+            if format == "text" {
+                for result in &tool_results {
+                    if let ContentPart::ToolResult { tool_use_id, content, is_error } = result {
+                        let status = if is_error.unwrap_or(false) { "ERROR" } else { "OK" };
+                        println!("[Tool {} result: {}]", tool_use_id, status);
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                            if let Some(title) = parsed.get("title") {
+                                println!("  {}", title);
+                            }
+                            if let Some(output) = parsed.get("output") {
+                                if let Some(output_str) = output.as_str() {
+                                    // Show first 200 chars
+                                    let preview = if output_str.len() > 200 {
+                                        format!("{}...", &output_str[..200])
+                                    } else {
+                                        output_str.to_string()
+                                    };
+                                    println!("  {}", preview);
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            StreamEvent::ToolCallStart { id, name } => {
-                if format == "text" {
-                    eprintln!("\n[Tool: {}]", name);
-                }
-                tool_calls.push((id, name, String::new()));
-                current_tool_args.clear();
+
+            // Add tool results to conversation
+            messages.push(tool::build_tool_result_message(tool_results));
+
+            // Continue the loop to get next LLM response
+            continue;
+        } else {
+            // No tool calls - add final assistant message and exit loop
+            if !response_text.is_empty() {
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: ChatContent::Text(response_text),
+                });
             }
-            StreamEvent::ToolCallDelta {
-                id: _,
-                arguments_delta,
-            } => {
-                current_tool_args.push_str(&arguments_delta);
+
+            if format == "text" {
+                println!();
             }
-            StreamEvent::ToolCallEnd { id } => {
-                if let Some((_, _, args)) = tool_calls.iter_mut().find(|(i, _, _)| *i == id) {
-                    *args = current_tool_args.clone();
-                }
+
+            // Check finish reason
+            if finish_reason == "tool_calls" {
+                eprintln!("[Warning: LLM indicated tool_calls but no tools found]");
             }
-            StreamEvent::Usage {
-                input_tokens,
-                output_tokens,
-                ..
-            } => {
-                if format == "text" {
-                    eprintln!("\n[Tokens: {} in, {} out]", input_tokens, output_tokens);
-                }
-            }
-            StreamEvent::Done { finish_reason: _ } => {
-                if format == "text" {
-                    println!();
-                }
-            }
-            StreamEvent::Error(err) => {
-                eprintln!("\nError: {}", err);
-                return Err(anyhow::anyhow!(err));
-            }
+
+            break;
         }
     }
 
-    // Output in requested format
+    // Output final result in requested format
     match format {
         "json" => {
             let output = serde_json::json!({
-                "response": response_text,
-                "tool_calls": tool_calls.iter().map(|(id, name, args)| {
-                    serde_json::json!({
-                        "id": id,
-                        "name": name,
-                        "arguments": args
-                    })
-                }).collect::<Vec<_>>()
+                "messages": messages,
+                "steps": step,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         "markdown" => {
-            println!("{}", response_text);
-            if !tool_calls.is_empty() {
-                println!("\n## Tool Calls\n");
-                for (_id, name, args) in &tool_calls {
-                    println!("### {}\n", name);
-                    println!("```json\n{}\n```\n", args);
-                }
-            }
+            // Already printed during streaming
         }
         _ => {
             // Already printed during streaming

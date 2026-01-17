@@ -6,6 +6,7 @@
 
 mod bash;
 mod edit;
+mod executor;
 mod glob;
 mod grep;
 mod read;
@@ -14,6 +15,7 @@ mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
+pub use executor::*;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use read::ReadTool;
