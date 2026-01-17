@@ -1,4 +1,4 @@
-use crate::slash_command::{CommandContext, CommandOutput, SlashCommand};
+use crate::slash_command::{CommandAction, CommandContext, CommandOutput, SlashCommand};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -24,13 +24,7 @@ impl SlashCommand for ClearCommand {
     }
 
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> Result<CommandOutput> {
-        // This is a special command that the TUI will handle by creating a new session
-        Ok(CommandOutput {
-            text: String::new(),
-            submit_to_llm: false,
-            system: None,
-            agent: None,
-            model: None,
-        })
+        // Trigger new session action
+        Ok(CommandOutput::action(CommandAction::NewSession))
     }
 }

@@ -1,4 +1,4 @@
-use crate::slash_command::{CommandContext, CommandOutput, SlashCommand};
+use crate::slash_command::{CommandAction, CommandContext, CommandOutput, SlashCommand};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -12,20 +12,23 @@ impl SlashCommand for ModelCommand {
     }
 
     fn description(&self) -> &str {
-        "Switch to a different model"
+        "Switch model or open model selector"
     }
 
     fn usage(&self) -> &str {
         "/model [provider/model]"
     }
 
+    fn aliases(&self) -> Vec<&str> {
+        vec!["models"]
+    }
+
     async fn execute(&self, args: &str, _ctx: &CommandContext) -> Result<CommandOutput> {
         let args = args.trim();
 
         if args.is_empty() {
-            Ok(CommandOutput::text(
-                "Usage: /model <provider/model>\nExample: /model anthropic/claude-3-5-sonnet-20241022"
-            ))
+            // Open model selector dialog
+            Ok(CommandOutput::action(CommandAction::OpenModelSelector))
         } else {
             // This will be handled by the TUI to actually switch models
             Ok(CommandOutput {
@@ -34,6 +37,7 @@ impl SlashCommand for ModelCommand {
                 system: None,
                 agent: None,
                 model: Some(args.to_string()),
+                action: None,
             })
         }
     }

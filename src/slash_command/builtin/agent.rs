@@ -34,6 +34,7 @@ impl SlashCommand for AgentCommand {
                 system: None,
                 agent: Some(args.to_string()),
                 model: None,
+                action: None,
             })
         }
     }

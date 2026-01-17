@@ -19,7 +19,7 @@ use crate::provider::{self, Model, Provider, StreamEvent};
 use crate::session::{CreateSessionOptions, Session};
 use crate::slash_command::{
     builtin::*, parser::ParsedCommand, registry::CommandRegistry, template::TemplateCommand,
-    CommandContext,
+    CommandAction, CommandContext, CommandOutput,
 };
 use crate::tool;
 
@@ -224,25 +224,41 @@ impl DialogState {
     }
 
     pub fn update_filter(&mut self) {
+        use fuzzy_matcher::FuzzyMatcher;
+        
         if self.search_query.is_empty() {
             self.filtered_indices = (0..self.items.len()).collect();
         } else {
-            let query = self.search_query.to_lowercase();
-            self.filtered_indices = self
+            let matcher = fuzzy_matcher::skim::SkimMatcherV2::default();
+            
+            // Score each item and filter
+            let mut scored_items: Vec<(usize, i64)> = self
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| {
-                    item.label.to_lowercase().contains(&query)
-                        || item.id.to_lowercase().contains(&query)
-                        || item
-                            .description
-                            .as_ref()
-                            .map(|d| d.to_lowercase().contains(&query))
-                            .unwrap_or(false)
+                .filter_map(|(idx, item)| {
+                    // Try matching against label, id, and description
+                    let label_score = matcher.fuzzy_match(&item.label, &self.search_query);
+                    let id_score = matcher.fuzzy_match(&item.id, &self.search_query);
+                    let desc_score = item
+                        .description
+                        .as_ref()
+                        .and_then(|d| matcher.fuzzy_match(d, &self.search_query));
+                    
+                    // Use the best score
+                    let best_score = [label_score, id_score, desc_score]
+                        .into_iter()
+                        .flatten()
+                        .max()?;
+                    
+                    Some((idx, best_score))
                 })
-                .map(|(i, _)| i)
                 .collect();
+            
+            // Sort by score (descending)
+            scored_items.sort_by(|a, b| b.1.cmp(&a.1));
+            
+            self.filtered_indices = scored_items.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected_index = 0;
     }
@@ -562,16 +578,19 @@ impl App {
         }
     }
 
-    /// Insert selected autocomplete item
-    pub fn insert_autocomplete_selection(&mut self) {
+    /// Insert selected autocomplete item and return the command name
+    pub fn insert_autocomplete_selection(&mut self) -> Option<String> {
         if let Some(autocomplete) = &self.autocomplete {
             if let Some(item) = autocomplete.selected_item() {
-                // Replace the current input with the selected command
-                self.input = format!("/{} ", item.name);
-                self.cursor_position = self.input.len();
+                let command_name = item.name.clone();
                 self.hide_autocomplete();
+                // Clear the input - we'll execute the command directly
+                self.input.clear();
+                self.cursor_position = 0;
+                return Some(command_name);
             }
         }
+        None
     }
 
     /// Set the current model
@@ -829,7 +848,42 @@ async fn run_app(
                             continue;
                         }
                         KeyCode::Enter | KeyCode::Tab => {
-                            app.insert_autocomplete_selection();
+                            // Execute the selected command immediately
+                            if let Some(command_name) = app.insert_autocomplete_selection() {
+                                // Execute slash command
+                                let ctx = CommandContext {
+                                    session_id: app
+                                        .session
+                                        .as_ref()
+                                        .map(|s| s.id.clone())
+                                        .unwrap_or_default(),
+                                    cwd: std::env::current_dir()
+                                        .ok()
+                                        .and_then(|p| p.to_str().map(String::from))
+                                        .unwrap_or_else(|| ".".to_string()),
+                                    root: std::env::current_dir()
+                                        .ok()
+                                        .and_then(|p| p.to_str().map(String::from))
+                                        .unwrap_or_else(|| ".".to_string()),
+                                    extra: Default::default(),
+                                };
+
+                                let registry = app.command_registry.clone();
+                                match registry.execute(&command_name, "", &ctx).await {
+                                    Ok(output) => {
+                                        handle_command_output(
+                                            app,
+                                            &command_name,
+                                            output,
+                                            event_tx.clone(),
+                                        )
+                                        .await?;
+                                    }
+                                    Err(e) => {
+                                        app.add_message("system", &format!("Error: {}", e));
+                                    }
+                                }
+                            }
                             continue;
                         }
                         KeyCode::Esc => {
@@ -908,131 +962,13 @@ async fn run_app(
                                 let registry = app.command_registry.clone();
                                 match registry.execute(&parsed.name, &parsed.args, &ctx).await {
                                     Ok(output) => {
-                                        // Handle special commands
-                                        if parsed.name == "clear" || parsed.name == "new" {
-                                            // Create new session
-                                            match Session::create(CreateSessionOptions::default())
-                                                .await
-                                            {
-                                                Ok(session) => {
-                                                    app.session_title = session.title.clone();
-                                                    app.session_slug = session.slug.clone();
-                                                    app.session = Some(session);
-                                                    app.messages.clear();
-                                                    app.total_cost = 0.0;
-                                                    app.total_tokens = 0;
-                                                    app.status = "Session cleared".to_string();
-                                                }
-                                                Err(e) => {
-                                                    app.status =
-                                                        format!("Error creating session: {}", e);
-                                                }
-                                            }
-                                            continue;
-                                        }
-
-                                        // Handle model switch
-                                        if let Some(model) = &output.model {
-                                            if let Some((provider_id, model_id)) =
-                                                provider::parse_model_string(model)
-                                            {
-                                                app.provider_id = provider_id.clone();
-                                                app.model_id = model_id.clone();
-                                                app.model_display =
-                                                    format!("{}/{}", provider_id, model_id);
-                                                app.model_configured = true;
-                                                app.status =
-                                                    format!("Switched to model: {}", model);
-                                            }
-                                            continue;
-                                        }
-
-                                        // Handle agent switch
-                                        if let Some(_agent) = &output.agent {
-                                            // TODO: Implement agent switching
-                                            app.status =
-                                                "Agent switching not yet implemented".to_string();
-                                            continue;
-                                        }
-
-                                        // Display command output if not empty
-                                        if !output.text.is_empty() {
-                                            app.add_message("system", &output.text);
-                                        }
-
-                                        // If the command wants to submit to LLM, do it
-                                        if output.submit_to_llm {
-                                            app.is_processing = true;
-                                            app.status = "Processing".to_string();
-
-                                            // Add empty assistant message
-                                            app.add_message("assistant", "");
-
-                                            // Start streaming
-                                            let tx = event_tx.clone();
-                                            let provider_id = app.provider_id.clone();
-                                            let model_id = app.model_id.clone();
-                                            let prompt = output.text.clone();
-
-                                            tokio::spawn(async move {
-                                                match stream_response(
-                                                    &provider_id,
-                                                    &model_id,
-                                                    &prompt,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(mut rx) => {
-                                                        while let Some(event) = rx.recv().await {
-                                                            match event {
-                                                                StreamEvent::TextDelta(text) => {
-                                                                    let _ = tx
-                                                                        .send(
-                                                                            AppEvent::StreamDelta(
-                                                                                text,
-                                                                            ),
-                                                                        )
-                                                                        .await;
-                                                                }
-                                                                StreamEvent::Done { .. } => {
-                                                                    let _ = tx
-                                                                        .send(AppEvent::StreamDone)
-                                                                        .await;
-                                                                }
-                                                                StreamEvent::Error(err) => {
-                                                                    let _ = tx
-                                                                        .send(
-                                                                            AppEvent::StreamError(
-                                                                                err,
-                                                                            ),
-                                                                        )
-                                                                        .await;
-                                                                }
-                                                                StreamEvent::ToolCallStart {
-                                                                    name,
-                                                                    ..
-                                                                } => {
-                                                                    let _ = tx
-                                                                        .send(AppEvent::ToolCall(
-                                                                            name,
-                                                                            String::new(),
-                                                                        ))
-                                                                        .await;
-                                                                }
-                                                                _ => {}
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        let _ = tx
-                                                            .send(AppEvent::StreamError(
-                                                                e.to_string(),
-                                                            ))
-                                                            .await;
-                                                    }
-                                                }
-                                            });
-                                        }
+                                        handle_command_output(
+                                            app,
+                                            &parsed.name,
+                                            output,
+                                            event_tx.clone(),
+                                        )
+                                        .await?;
                                     }
                                     Err(e) => {
                                         app.add_message("system", &format!("Error: {}", e));
@@ -1640,4 +1576,138 @@ async fn handle_openai_callback(
                 .await;
         }
     }
+}
+
+/// Handle command output
+async fn handle_command_output(
+    app: &mut App,
+    command_name: &str,
+    output: CommandOutput,
+    event_tx: mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    // Handle special actions
+    if let Some(action) = &output.action {
+        match action {
+            CommandAction::OpenModelSelector => {
+                app.open_model_selector();
+                return Ok(());
+            }
+            CommandAction::OpenAgentSelector => {
+                // TODO: Implement agent selector
+                app.add_message("system", "Agent selector not yet implemented");
+                return Ok(());
+            }
+            CommandAction::OpenSessionList => {
+                // TODO: Implement session list
+                app.add_message("system", "Session list not yet implemented");
+                return Ok(());
+            }
+            CommandAction::NewSession => {
+                // Create new session
+                match Session::create(CreateSessionOptions::default()).await {
+                    Ok(session) => {
+                        app.session_title = session.title.clone();
+                        app.session_slug = session.slug.clone();
+                        app.session = Some(session);
+                        app.messages.clear();
+                        app.total_cost = 0.0;
+                        app.total_tokens = 0;
+                        app.status = "Session cleared".to_string();
+                    }
+                    Err(e) => {
+                        app.status = format!("Error creating session: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    // Handle special commands
+    if command_name == "clear" || command_name == "new" {
+        // Create new session
+        match Session::create(CreateSessionOptions::default()).await {
+            Ok(session) => {
+                app.session_title = session.title.clone();
+                app.session_slug = session.slug.clone();
+                app.session = Some(session);
+                app.messages.clear();
+                app.total_cost = 0.0;
+                app.total_tokens = 0;
+                app.status = "Session cleared".to_string();
+            }
+            Err(e) => {
+                app.status = format!("Error creating session: {}", e);
+            }
+        }
+        return Ok(());
+    }
+
+    // Handle model switch
+    if let Some(model) = &output.model {
+        if let Some((provider_id, model_id)) = provider::parse_model_string(model) {
+            app.provider_id = provider_id.clone();
+            app.model_id = model_id.clone();
+            app.model_display = format!("{}/{}", provider_id, model_id);
+            app.model_configured = true;
+            app.status = format!("Switched to model: {}", model);
+        }
+        return Ok(());
+    }
+
+    // Handle agent switch
+    if let Some(_agent) = &output.agent {
+        // TODO: Implement agent switching
+        app.status = "Agent switching not yet implemented".to_string();
+        return Ok(());
+    }
+
+    // Display command output if not empty
+    if !output.text.is_empty() {
+        app.add_message("system", &output.text);
+    }
+
+    // If the command wants to submit to LLM, do it
+    if output.submit_to_llm {
+        app.is_processing = true;
+        app.status = "Processing".to_string();
+
+        // Add empty assistant message
+        app.add_message("assistant", "");
+
+        // Start streaming
+        let provider_id = app.provider_id.clone();
+        let model_id = app.model_id.clone();
+        let prompt = output.text.clone();
+
+        tokio::spawn(async move {
+            match stream_response(&provider_id, &model_id, &prompt).await {
+                Ok(mut rx) => {
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            StreamEvent::TextDelta(text) => {
+                                let _ = event_tx.send(AppEvent::StreamDelta(text)).await;
+                            }
+                            StreamEvent::Done { .. } => {
+                                let _ = event_tx.send(AppEvent::StreamDone).await;
+                            }
+                            StreamEvent::Error(err) => {
+                                let _ = event_tx.send(AppEvent::StreamError(err)).await;
+                            }
+                            StreamEvent::ToolCallStart { name, .. } => {
+                                let _ =
+                                    event_tx.send(AppEvent::ToolCall(name, String::new())).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AppEvent::StreamError(e.to_string())).await;
+                }
+            }
+        });
+    }
+
+    Ok(())
 }

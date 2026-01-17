@@ -17,6 +17,19 @@ pub struct CommandContext {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
+/// Special actions that commands can trigger
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CommandAction {
+    /// Open model selector dialog
+    OpenModelSelector,
+    /// Open agent selector dialog
+    OpenAgentSelector,
+    /// Open session list
+    OpenSessionList,
+    /// Create new session
+    NewSession,
+}
+
 /// Output from a slash command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOutput {
@@ -30,6 +43,8 @@ pub struct CommandOutput {
     pub agent: Option<String>,
     /// Optional model to use
     pub model: Option<String>,
+    /// Special action to trigger
+    pub action: Option<CommandAction>,
 }
 
 impl CommandOutput {
@@ -41,6 +56,7 @@ impl CommandOutput {
             system: None,
             agent: None,
             model: None,
+            action: None,
         }
     }
 
@@ -52,6 +68,19 @@ impl CommandOutput {
             system: None,
             agent: None,
             model: None,
+            action: None,
+        }
+    }
+
+    /// Create output with a special action
+    pub fn action(action: CommandAction) -> Self {
+        Self {
+            text: String::new(),
+            submit_to_llm: false,
+            system: None,
+            agent: None,
+            model: None,
+            action: Some(action),
         }
     }
 

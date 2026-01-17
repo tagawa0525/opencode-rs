@@ -149,7 +149,7 @@ fn render_select_dialog(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Message
-            Constraint::Length(1), // Search
+            Constraint::Length(1), // Search with count
             Constraint::Length(1), // Divider
             Constraint::Min(3),    // List
             Constraint::Length(1), // Help
@@ -162,16 +162,24 @@ fn render_select_dialog(
         frame.render_widget(msg, chunks[0]);
     }
 
-    // Search input
+    // Search input with match count (fzf style)
+    let match_count = dialog.filtered_indices.len();
+    let total_count = dialog.items.len();
+    let count_text = format!(" {}/{}", match_count, total_count);
+    
     let search_text = if dialog.search_query.is_empty() {
-        Span::styled("Type to search...", Style::default().fg(theme.dim))
+        vec![
+            Span::styled("> ", Style::default().fg(theme.accent)),
+            Span::styled("Type to search...", Style::default().fg(theme.dim)),
+        ]
     } else {
-        Span::styled(&dialog.search_query, Style::default().fg(theme.foreground))
+        vec![
+            Span::styled("> ", Style::default().fg(theme.accent)),
+            Span::styled(&dialog.search_query, Style::default().fg(theme.foreground)),
+            Span::styled(count_text, Style::default().fg(theme.dim)),
+        ]
     };
-    let search = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(theme.accent)),
-        search_text,
-    ]));
+    let search = Paragraph::new(Line::from(search_text));
     frame.render_widget(search, chunks[1]);
 
     // List items
@@ -197,10 +205,11 @@ fn render_select_dialog(
                 Style::default().fg(theme.foreground)
             };
 
+            // Format: label - description (fzf style)
             let content = if let Some(desc) = &item.description {
-                format!("{} - {}", item.label, desc)
+                format!("  {} - {}", item.label, desc)
             } else {
-                item.label.clone()
+                format!("  {}", item.label)
             };
 
             ListItem::new(content).style(style)
@@ -208,7 +217,7 @@ fn render_select_dialog(
         .collect();
 
     if items.is_empty() {
-        let empty = Paragraph::new("No items found")
+        let empty = Paragraph::new("No matches")
             .style(Style::default().fg(theme.dim))
             .alignment(Alignment::Center);
         frame.render_widget(empty, chunks[3]);
@@ -217,8 +226,8 @@ fn render_select_dialog(
         frame.render_widget(list, chunks[3]);
     }
 
-    // Help text
-    let help = Paragraph::new("Enter: Select | Esc: Cancel | Type to search")
+    // Help text (fzf style)
+    let help = Paragraph::new("↑↓: Navigate | Enter: Select | Esc: Cancel")
         .style(Style::default().fg(theme.dim))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[4]);
@@ -460,7 +469,7 @@ fn render_autocomplete(
 
     // Calculate autocomplete position (above the input box)
     let max_items = autocomplete.items.len().min(10);
-    let height = (max_items as u16 + 2).min(12); // +2 for borders
+    let height = (max_items as u16 + 3).min(13); // +3 for borders and search info
     let width = input_area.width.min(60);
     let x = input_area.x;
     let y = input_area.y.saturating_sub(height);
@@ -472,13 +481,32 @@ fn render_autocomplete(
 
     // Draw border
     let block = Block::default()
-        .title(" Commands ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .style(Style::default().bg(theme.background));
 
     let inner = block.inner(autocomplete_area);
     frame.render_widget(block, autocomplete_area);
+
+    // Split for search info and items
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Search info
+            Constraint::Min(1),    // Items
+        ])
+        .split(inner);
+
+    // Search info with match count (fzf style)
+    let match_count = autocomplete.items.len();
+    let search_info = if autocomplete.filter.is_empty() {
+        format!("> {} commands", match_count)
+    } else {
+        format!("> /{} - {} matches", autocomplete.filter, match_count)
+    };
+    let search_para = Paragraph::new(search_info)
+        .style(Style::default().fg(theme.dim));
+    frame.render_widget(search_para, chunks[0]);
 
     // Render items
     let items: Vec<ListItem> = autocomplete
@@ -497,11 +525,12 @@ fn render_autocomplete(
                 Style::default().fg(theme.foreground)
             };
 
-            let content = format!("{:<20} {}", item.display, item.description);
+            // Format: display - description (fzf style)
+            let content = format!("  {:<20} {}", item.display, item.description);
             ListItem::new(content).style(style)
         })
         .collect();
 
     let list = List::new(items);
-    frame.render_widget(list, inner);
+    frame.render_widget(list, chunks[1]);
 }
