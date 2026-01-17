@@ -23,6 +23,7 @@ pub enum MessageRole {
 /// Base message information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role")]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     #[serde(rename = "user")]
     User(UserMessage),
@@ -223,6 +224,7 @@ pub struct UserSummary {
 /// Message errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name")]
+#[allow(clippy::enum_variant_names)]
 pub enum MessageError {
     #[serde(rename = "ProviderAuthError")]
     AuthError {
