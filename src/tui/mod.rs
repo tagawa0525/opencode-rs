@@ -5,6 +5,7 @@
 mod app;
 mod components;
 mod input;
+mod llm_streaming;
 mod oauth_flow;
 mod theme;
 mod types;
