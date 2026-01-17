@@ -214,6 +214,37 @@ impl DialogState {
     }
 }
 
+/// Application events for the TUI event loop
+#[derive(Debug)]
+pub enum AppEvent {
+    StreamDelta(String),
+    StreamDone,
+    StreamError(String),
+    ToolCall(String, String),
+    ToolResult {
+        id: String,
+        output: String,
+        is_error: bool,
+    },
+    PermissionRequested(PermissionRequest),
+    PermissionResponse {
+        id: String,
+        allow: bool,
+        always: bool,
+    },
+    // OAuth events
+    DeviceCodeReceived {
+        user_code: String,
+        verification_uri: String,
+        device_code: String,
+        interval: u64,
+    },
+    OAuthSuccess {
+        provider_id: String,
+    },
+    OAuthError(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

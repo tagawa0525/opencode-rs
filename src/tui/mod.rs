@@ -5,6 +5,7 @@
 mod app;
 mod components;
 mod input;
+mod oauth_flow;
 mod theme;
 mod types;
 mod ui;
