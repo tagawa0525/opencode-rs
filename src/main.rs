@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod id;
 mod oauth;
+mod permission;
 mod provider;
 mod session;
 mod slash_command;

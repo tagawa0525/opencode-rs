@@ -1,9 +1,10 @@
 //! Prompt command - runs a single prompt without TUI.
 
 use crate::config::Config;
+use crate::permission::PermissionChecker;
 use crate::provider::{self, ChatContent, ChatMessage, ContentPart, StreamEvent};
 use crate::session::{CreateSessionOptions, Session};
-use crate::tool::{self, ToolCallTracker, ToolContext};
+use crate::tool::{self, DoomLoopDetector, ToolCallTracker, ToolContext};
 use anyhow::Result;
 
 /// Execute a single prompt without TUI (with agentic loop)
@@ -44,6 +45,9 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     // Create a session
     let _session = Session::create(CreateSessionOptions::default()).await?;
 
+    // Create permission checker
+    let permission_checker = PermissionChecker::from_config(&config);
+
     // Create tool context
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
@@ -73,6 +77,7 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
     // Agentic loop - continue until LLM finishes without tool calls
     let mut step = 0;
     let max_steps = 10; // Prevent infinite loops
+    let mut doom_detector = DoomLoopDetector::new();
 
     loop {
         step += 1;
@@ -205,13 +210,58 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
 
         // Check if there are tool calls to execute
         let pending_calls = tool_tracker.get_all_calls();
-        
+
         if !pending_calls.is_empty() {
-            // Add tool use parts to assistant message
+            // Check for doom loop before executing tools
+            doom_detector.add_calls(&pending_calls);
+
+            if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
+                eprintln!("\n[WARNING: Doom loop detected!]");
+                eprintln!(
+                    "[The LLM has called '{}' with identical arguments {} times in a row]",
+                    tool_name,
+                    tool::DOOM_LOOP_THRESHOLD
+                );
+                eprintln!("[Arguments: {}]", args);
+                eprintln!("[This may indicate the LLM is stuck.]");
+
+                // Check permission for doom loop continuation
+                let allowed = permission_checker
+                    .check_doom_loop_and_ask_cli(&tool_name, &args)
+                    .await?;
+
+                if !allowed {
+                    eprintln!("[User declined doom loop continuation - stopping execution]");
+                    break;
+                }
+
+                eprintln!("[User approved - continuing execution]");
+            }
+
+            // Check permissions for each tool call
+            let mut approved_calls = Vec::new();
             for call in &pending_calls {
-                let args: serde_json::Value = serde_json::from_str(&call.arguments)
-                    .unwrap_or_else(|_| serde_json::json!({}));
-                
+                let allowed = permission_checker
+                    .check_and_ask_cli(&call.name, &call.arguments)
+                    .await?;
+
+                if allowed {
+                    approved_calls.push(call.clone());
+                } else {
+                    eprintln!("[User denied execution of tool: {}]", call.name);
+                }
+            }
+
+            if approved_calls.is_empty() {
+                eprintln!("[No tools approved - stopping execution]");
+                break;
+            }
+
+            // Add tool use parts to assistant message (only approved)
+            for call in &approved_calls {
+                let args: serde_json::Value =
+                    serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+
                 assistant_parts.push(ContentPart::ToolUse {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -232,18 +282,30 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
                 },
             });
 
-            // Execute tools
+            // Execute tools (in parallel for better performance)
             if format == "text" {
-                println!("\n[Executing {} tool(s)...]", pending_calls.len());
+                println!(
+                    "\n[Executing {} tool(s) in parallel...]",
+                    approved_calls.len()
+                );
             }
 
-            let tool_results = tool::execute_all_tools(pending_calls, &tool_ctx).await;
+            let tool_results = tool::execute_all_tools_parallel(approved_calls, &tool_ctx).await;
 
             // Show tool results in text format
             if format == "text" {
                 for result in &tool_results {
-                    if let ContentPart::ToolResult { tool_use_id, content, is_error } = result {
-                        let status = if is_error.unwrap_or(false) { "ERROR" } else { "OK" };
+                    if let ContentPart::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } = result
+                    {
+                        let status = if is_error.unwrap_or(false) {
+                            "ERROR"
+                        } else {
+                            "OK"
+                        };
                         println!("[Tool {} result: {}]", tool_use_id, status);
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
                             if let Some(title) = parsed.get("title") {

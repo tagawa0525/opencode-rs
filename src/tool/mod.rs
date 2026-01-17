@@ -39,6 +39,7 @@ pub struct ToolDefinition {
 }
 
 /// Tool execution context
+#[derive(Clone)]
 pub struct ToolContext {
     /// Session ID
     pub session_id: String,

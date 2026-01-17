@@ -19,8 +19,8 @@ pub enum StreamEvent {
     /// Tool call completed
     ToolCallEnd { id: String },
     /// Tool result ready (for manual execution)
-    ToolResult { 
-        id: String, 
+    ToolResult {
+        id: String,
         result: String,
         is_error: bool,
     },
