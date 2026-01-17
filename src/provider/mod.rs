@@ -776,6 +776,102 @@ impl ProviderRegistry {
             },
         );
 
+        models.insert(
+            "claude-sonnet-4-5-20250929".to_string(),
+            Model {
+                id: "claude-sonnet-4-5-20250929".to_string(),
+                provider_id: "copilot".to_string(),
+                name: "Claude Sonnet 4.5 (Copilot)".to_string(),
+                family: Some("claude-4.5".to_string()),
+                api: ModelApi {
+                    id: "claude-sonnet-4-5-20250929".to_string(),
+                    url: Some("https://api.githubcopilot.com".to_string()),
+                    npm: None,
+                },
+                capabilities: ModelCapabilities {
+                    temperature: true,
+                    reasoning: true,
+                    attachment: true,
+                    toolcall: true,
+                    input: Modalities {
+                        text: true,
+                        image: true,
+                        pdf: true,
+                        ..Default::default()
+                    },
+                    output: Modalities {
+                        text: true,
+                        ..Default::default()
+                    },
+                    interleaved: InterleavedSupport::Bool(true),
+                },
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                limit: ModelLimit {
+                    context: 200000,
+                    input: None,
+                    output: 16384,
+                },
+                status: ModelStatus::Active,
+                options: HashMap::new(),
+                headers: HashMap::new(),
+                release_date: Some("2025-09-29".to_string()),
+                variants: HashMap::new(),
+            },
+        );
+
+        models.insert(
+            "claude-opus-4-5-20251124".to_string(),
+            Model {
+                id: "claude-opus-4-5-20251124".to_string(),
+                provider_id: "copilot".to_string(),
+                name: "Claude Opus 4.5 (Copilot)".to_string(),
+                family: Some("claude-4.5".to_string()),
+                api: ModelApi {
+                    id: "claude-opus-4-5-20251124".to_string(),
+                    url: Some("https://api.githubcopilot.com".to_string()),
+                    npm: None,
+                },
+                capabilities: ModelCapabilities {
+                    temperature: true,
+                    reasoning: true,
+                    attachment: true,
+                    toolcall: true,
+                    input: Modalities {
+                        text: true,
+                        image: true,
+                        pdf: true,
+                        ..Default::default()
+                    },
+                    output: Modalities {
+                        text: true,
+                        ..Default::default()
+                    },
+                    interleaved: InterleavedSupport::Bool(true),
+                },
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                limit: ModelLimit {
+                    context: 200000,
+                    input: None,
+                    output: 16384,
+                },
+                status: ModelStatus::Active,
+                options: HashMap::new(),
+                headers: HashMap::new(),
+                release_date: Some("2025-11-24".to_string()),
+                variants: HashMap::new(),
+            },
+        );
+
         models
     }
 

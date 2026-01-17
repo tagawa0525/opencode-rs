@@ -58,9 +58,12 @@ Edit the configuration file to add your API keys:
     },
     "openai": {
       "key": "$OPENAI_API_KEY"
+    },
+    "copilot": {
+      "key": "$GITHUB_COPILOT_TOKEN"
     }
   },
-  "model": "anthropic/claude-3-5-sonnet-20241022"
+  "model": "copilot/claude-sonnet-4-5-20250929"
 }
 ```
 
@@ -104,7 +107,7 @@ cargo build --release
 Send a single prompt without TUI:
 
 ```bash
-opencode prompt "explain this code" --model anthropic/claude-3-5-sonnet-20241022
+opencode prompt "explain this code" --model copilot/claude-sonnet-4-5-20250929
 ```
 
 Options:
@@ -166,8 +169,8 @@ The configuration is loaded from:
 {
   "$schema": "https://opencode.ai/schema/config.json",
   "theme": "dark",
-  "model": "anthropic/claude-3-5-sonnet-20241022",
-  "small_model": "anthropic/claude-3-haiku-20240307",
+  "model": "copilot/claude-sonnet-4-5-20250929",
+  "small_model": "copilot/claude-3.5-sonnet",
   "provider": {
     "anthropic": {
       "key": "$ANTHROPIC_API_KEY"
@@ -175,6 +178,9 @@ The configuration is loaded from:
     "openai": {
       "key": "$OPENAI_API_KEY",
       "base_url": "https://api.openai.com/v1"
+    },
+    "copilot": {
+      "key": "$GITHUB_COPILOT_TOKEN"
     }
   },
   "server": {
@@ -191,6 +197,7 @@ The configuration is loaded from:
 
 - `ANTHROPIC_API_KEY`: Anthropic API key
 - `OPENAI_API_KEY`: OpenAI API key
+- `GITHUB_COPILOT_TOKEN`: GitHub Copilot access token
 - `OPENCODE_MODEL`: Override default model
 - `OPENCODE_THEME`: Override theme (dark/light)
 - `OPENCODE_LOG_LEVEL`: Set log level (debug/info/warn/error)
