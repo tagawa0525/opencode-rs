@@ -4,6 +4,7 @@
 
 mod app;
 mod autocomplete;
+mod command_handler;
 mod components;
 mod dialog;
 mod input;
