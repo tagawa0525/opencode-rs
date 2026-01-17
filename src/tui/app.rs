@@ -2292,3 +2292,520 @@ async fn handle_command_output(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod autocomplete_state {
+        use super::*;
+
+        fn create_items() -> Vec<CommandItem> {
+            vec![
+                CommandItem {
+                    name: "help".to_string(),
+                    description: "Show help".to_string(),
+                    display: "/help".to_string(),
+                },
+                CommandItem {
+                    name: "model".to_string(),
+                    description: "Select model".to_string(),
+                    display: "/model".to_string(),
+                },
+                CommandItem {
+                    name: "clear".to_string(),
+                    description: "Clear session".to_string(),
+                    display: "/clear".to_string(),
+                },
+            ]
+        }
+
+        #[test]
+        fn test_new() {
+            let items = create_items();
+            let state = AutocompleteState::new(items.clone());
+
+            assert_eq!(state.items.len(), 3);
+            assert_eq!(state.selected_index, 0);
+            assert_eq!(state.filter, "");
+        }
+
+        #[test]
+        fn test_move_down() {
+            let items = create_items();
+            let mut state = AutocompleteState::new(items);
+
+            assert_eq!(state.selected_index, 0);
+            state.move_down();
+            assert_eq!(state.selected_index, 1);
+            state.move_down();
+            assert_eq!(state.selected_index, 2);
+            // Should wrap around
+            state.move_down();
+            assert_eq!(state.selected_index, 0);
+        }
+
+        #[test]
+        fn test_move_up() {
+            let items = create_items();
+            let mut state = AutocompleteState::new(items);
+
+            assert_eq!(state.selected_index, 0);
+            // Should wrap to end
+            state.move_up();
+            assert_eq!(state.selected_index, 2);
+            state.move_up();
+            assert_eq!(state.selected_index, 1);
+        }
+
+        #[test]
+        fn test_selected_item() {
+            let items = create_items();
+            let state = AutocompleteState::new(items);
+
+            let selected = state.selected_item().unwrap();
+            assert_eq!(selected.name, "help");
+        }
+
+        #[test]
+        fn test_empty_items() {
+            let state = AutocompleteState::new(vec![]);
+            assert!(state.selected_item().is_none());
+        }
+    }
+
+    mod dialog_state {
+        use super::*;
+
+        fn create_items() -> Vec<SelectItem> {
+            vec![
+                SelectItem {
+                    id: "anthropic/claude-3-5-sonnet".to_string(),
+                    label: "Claude 3.5 Sonnet".to_string(),
+                    description: Some("Anthropic's latest".to_string()),
+                    provider_id: Some("anthropic".to_string()),
+                },
+                SelectItem {
+                    id: "openai/gpt-4o".to_string(),
+                    label: "GPT-4o".to_string(),
+                    description: Some("OpenAI's flagship".to_string()),
+                    provider_id: Some("openai".to_string()),
+                },
+                SelectItem {
+                    id: "anthropic/claude-3-opus".to_string(),
+                    label: "Claude 3 Opus".to_string(),
+                    description: Some("Most powerful".to_string()),
+                    provider_id: Some("anthropic".to_string()),
+                },
+            ]
+        }
+
+        #[test]
+        fn test_new() {
+            let dialog = DialogState::new(DialogType::ModelSelector, "Select Model");
+
+            assert_eq!(dialog.dialog_type, DialogType::ModelSelector);
+            assert_eq!(dialog.title, "Select Model");
+            assert_eq!(dialog.selected_index, 0);
+            assert!(dialog.items.is_empty());
+        }
+
+        #[test]
+        fn test_with_items() {
+            let items = create_items();
+            let dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            assert_eq!(dialog.items.len(), 3);
+            assert_eq!(dialog.filtered_indices.len(), 3);
+        }
+
+        #[test]
+        fn test_move_down() {
+            let items = create_items();
+            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            assert_eq!(dialog.selected_index, 0);
+            dialog.move_down();
+            assert_eq!(dialog.selected_index, 1);
+            dialog.move_down();
+            assert_eq!(dialog.selected_index, 2);
+            // Does not wrap
+            dialog.move_down();
+            assert_eq!(dialog.selected_index, 2);
+        }
+
+        #[test]
+        fn test_move_up() {
+            let items = create_items();
+            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            dialog.selected_index = 2;
+            dialog.move_up();
+            assert_eq!(dialog.selected_index, 1);
+            dialog.move_up();
+            assert_eq!(dialog.selected_index, 0);
+            // Does not wrap
+            dialog.move_up();
+            assert_eq!(dialog.selected_index, 0);
+        }
+
+        #[test]
+        fn test_selected_item() {
+            let items = create_items();
+            let dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            let selected = dialog.selected_item().unwrap();
+            assert_eq!(selected.id, "anthropic/claude-3-5-sonnet");
+        }
+
+        #[test]
+        fn test_update_filter_empty() {
+            let items = create_items();
+            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            dialog.search_query = "".to_string();
+            dialog.update_filter();
+
+            assert_eq!(dialog.filtered_indices.len(), 3);
+        }
+
+        #[test]
+        fn test_update_filter_matches() {
+            let items = create_items();
+            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            dialog.search_query = "claude".to_string();
+            dialog.update_filter();
+
+            // Should match Claude models
+            assert!(dialog.filtered_indices.len() >= 2);
+        }
+
+        #[test]
+        fn test_update_filter_no_match() {
+            let items = create_items();
+            let mut dialog = DialogState::new(DialogType::ModelSelector, "Select Model")
+                .with_items(items);
+
+            dialog.search_query = "xyz123notfound".to_string();
+            dialog.update_filter();
+
+            assert!(dialog.filtered_indices.is_empty());
+        }
+    }
+
+    mod app_action_handling {
+        use super::*;
+
+        #[test]
+        fn test_char_action() {
+            let mut app = App::default();
+            app.handle_action(Action::Char('a'));
+
+            assert_eq!(app.input, "a");
+            assert_eq!(app.cursor_position, 1);
+        }
+
+        #[test]
+        fn test_multiple_chars() {
+            let mut app = App::default();
+            app.handle_action(Action::Char('H'));
+            app.handle_action(Action::Char('i'));
+
+            assert_eq!(app.input, "Hi");
+            assert_eq!(app.cursor_position, 2);
+        }
+
+        #[test]
+        fn test_backspace() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 5;
+
+            app.handle_action(Action::Backspace);
+
+            assert_eq!(app.input, "Hell");
+            assert_eq!(app.cursor_position, 4);
+        }
+
+        #[test]
+        fn test_backspace_at_start() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 0;
+
+            app.handle_action(Action::Backspace);
+
+            assert_eq!(app.input, "Hello");
+            assert_eq!(app.cursor_position, 0);
+        }
+
+        #[test]
+        fn test_delete() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 0;
+
+            app.handle_action(Action::Delete);
+
+            assert_eq!(app.input, "ello");
+            assert_eq!(app.cursor_position, 0);
+        }
+
+        #[test]
+        fn test_cursor_left() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 3;
+
+            app.handle_action(Action::Left);
+
+            assert_eq!(app.cursor_position, 2);
+        }
+
+        #[test]
+        fn test_cursor_right() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 2;
+
+            app.handle_action(Action::Right);
+
+            assert_eq!(app.cursor_position, 3);
+        }
+
+        #[test]
+        fn test_home() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 3;
+
+            app.handle_action(Action::Home);
+
+            assert_eq!(app.cursor_position, 0);
+        }
+
+        #[test]
+        fn test_end() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 0;
+
+            app.handle_action(Action::End);
+
+            assert_eq!(app.cursor_position, 5);
+        }
+
+        #[test]
+        fn test_newline() {
+            let mut app = App::default();
+            app.input = "Hello".to_string();
+            app.cursor_position = 5;
+
+            app.handle_action(Action::Newline);
+
+            assert_eq!(app.input, "Hello\n");
+            assert_eq!(app.cursor_position, 6);
+        }
+
+        #[test]
+        fn test_clear_input() {
+            let mut app = App::default();
+            app.input = "Hello World".to_string();
+            app.cursor_position = 6;
+
+            app.handle_action(Action::ClearInput);
+
+            assert_eq!(app.input, "");
+            assert_eq!(app.cursor_position, 0);
+        }
+
+        #[test]
+        fn test_quit() {
+            let mut app = App::default();
+            assert!(!app.should_quit);
+
+            app.handle_action(Action::Quit);
+
+            assert!(app.should_quit);
+        }
+    }
+
+    mod app_message_handling {
+        use super::*;
+
+        #[test]
+        fn test_add_message() {
+            let mut app = App::default();
+            app.add_message("user", "Hello");
+
+            assert_eq!(app.messages.len(), 1);
+            assert_eq!(app.messages[0].role, "user");
+            assert_eq!(app.messages[0].content, "Hello");
+        }
+
+        #[test]
+        fn test_add_tool_call() {
+            let mut app = App::default();
+            app.add_message("assistant", "Let me help");
+            app.add_tool_call("call_123", "bash", r#"{"cmd": "ls"}"#);
+
+            assert_eq!(app.messages.len(), 1);
+            assert_eq!(app.messages[0].parts.len(), 2);
+        }
+
+        #[test]
+        fn test_update_last_assistant() {
+            let mut app = App::default();
+            app.add_message("assistant", "Processing...");
+            app.update_last_assistant("Done!");
+
+            assert_eq!(app.messages[0].content, "Done!");
+        }
+
+        #[test]
+        fn test_append_to_assistant() {
+            let mut app = App::default();
+            app.add_message("assistant", "Hello");
+            app.append_to_assistant(" World");
+
+            assert_eq!(app.messages[0].content, "Hello World");
+        }
+
+        #[test]
+        fn test_take_input() {
+            let mut app = App::default();
+            app.input = "Hello World".to_string();
+            app.cursor_position = 11;
+
+            let input = app.take_input();
+
+            assert_eq!(input, Some("Hello World".to_string()));
+            assert_eq!(app.input, "");
+            assert_eq!(app.cursor_position, 0);
+        }
+
+        #[test]
+        fn test_take_input_empty() {
+            let mut app = App::default();
+            app.input = "   ".to_string();
+
+            let input = app.take_input();
+
+            assert!(input.is_none());
+        }
+    }
+
+    mod app_state {
+        use super::*;
+
+        #[test]
+        fn test_default() {
+            let app = App::default();
+
+            assert_eq!(app.input, "");
+            assert_eq!(app.cursor_position, 0);
+            assert!(app.messages.is_empty());
+            assert!(app.session.is_none());
+            assert!(!app.is_processing);
+            assert!(!app.should_quit);
+            assert!(!app.model_configured);
+        }
+
+        #[test]
+        fn test_is_ready_not_configured() {
+            let app = App::default();
+            assert!(!app.is_ready());
+        }
+
+        #[test]
+        fn test_is_ready_configured() {
+            let mut app = App::default();
+            app.model_configured = true;
+            app.provider_id = "anthropic".to_string();
+            app.model_id = "claude-3-5-sonnet".to_string();
+
+            assert!(app.is_ready());
+        }
+
+        #[test]
+        fn test_close_dialog() {
+            let mut app = App::default();
+            app.dialog = Some(DialogState::new(DialogType::ModelSelector, "Test"));
+
+            app.close_dialog();
+
+            assert!(app.dialog.is_none());
+        }
+
+        #[test]
+        fn test_hide_autocomplete() {
+            let mut app = App::default();
+            app.autocomplete = Some(AutocompleteState::new(vec![]));
+
+            app.hide_autocomplete();
+
+            assert!(app.autocomplete.is_none());
+        }
+    }
+
+    mod unicode_handling {
+        use super::*;
+
+        #[test]
+        fn test_unicode_char() {
+            let mut app = App::default();
+            app.handle_action(Action::Char('日'));
+            app.handle_action(Action::Char('本'));
+            app.handle_action(Action::Char('語'));
+
+            assert_eq!(app.input, "日本語");
+            assert_eq!(app.cursor_position, 9); // 3 bytes per char
+        }
+
+        #[test]
+        fn test_unicode_backspace() {
+            let mut app = App::default();
+            app.input = "日本語".to_string();
+            app.cursor_position = 9; // End of string
+
+            app.handle_action(Action::Backspace);
+
+            assert_eq!(app.input, "日本");
+            assert_eq!(app.cursor_position, 6);
+        }
+
+        #[test]
+        fn test_unicode_cursor_movement() {
+            let mut app = App::default();
+            app.input = "日本語".to_string();
+            app.cursor_position = 9; // End
+
+            app.handle_action(Action::Left);
+            assert_eq!(app.cursor_position, 6); // Before 語
+
+            app.handle_action(Action::Left);
+            assert_eq!(app.cursor_position, 3); // Before 本
+
+            app.handle_action(Action::Right);
+            assert_eq!(app.cursor_position, 6); // After 本
+        }
+
+        #[test]
+        fn test_emoji_handling() {
+            let mut app = App::default();
+            app.input = "Hello 👋".to_string();
+            app.cursor_position = app.input.len();
+
+            // Should handle emoji properly
+            app.handle_action(Action::Backspace);
+            assert_eq!(app.input, "Hello ");
+        }
+    }
+}
