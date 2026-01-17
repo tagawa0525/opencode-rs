@@ -40,7 +40,7 @@ struct AccessTokenResponse {
 /// Request device code for GitHub Copilot
 pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
     let client = Client::new();
-    
+
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
@@ -55,7 +55,10 @@ pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
         .context("Failed to request device code")?;
 
     if !response.status().is_success() {
-        let error = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         anyhow::bail!("Device code request failed: {}", error);
     }
 
@@ -168,7 +171,10 @@ pub fn generate_pkce() -> PkceCodes {
     let hash = hasher.finalize();
     let challenge = URL_SAFE_NO_PAD.encode(hash);
 
-    PkceCodes { verifier, challenge }
+    PkceCodes {
+        verifier,
+        challenge,
+    }
 }
 
 /// Generate random state string
@@ -228,7 +234,10 @@ pub async fn openai_exchange_code(
         .context("Failed to exchange code for tokens")?;
 
     if !response.status().is_success() {
-        let error = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         anyhow::bail!("Token exchange failed: {}", error);
     }
 
@@ -257,7 +266,10 @@ pub async fn openai_refresh_token(refresh_token: &str) -> Result<OpenAITokenResp
         .context("Failed to refresh token")?;
 
     if !response.status().is_success() {
-        let error = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         anyhow::bail!("Token refresh failed: {}", error);
     }
 
@@ -286,7 +298,7 @@ pub async fn start_oauth_callback_server(
             let mut buffer = [0u8; 4096];
             if let Ok(n) = socket.read(&mut buffer).await {
                 let request = String::from_utf8_lossy(&buffer[..n]);
-                
+
                 // Parse the GET request for code and state
                 if let Some(line) = request.lines().next() {
                     if let Some(path) = line.split_whitespace().nth(1) {
@@ -299,12 +311,15 @@ pub async fn start_oauth_callback_server(
                                 })
                                 .collect();
 
-                            if let (Some(&code), Some(&state)) = (params.get("code"), params.get("state")) {
+                            if let (Some(&code), Some(&state)) =
+                                (params.get("code"), params.get("state"))
+                            {
                                 if state == expected_state {
                                     let _ = tx.send(code.to_string());
-                                    
+
                                     // Send success response
-                                    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+                                    let response =
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
                                         <html><body><h1>Authentication Successful!</h1>\
                                         <p>You can close this window and return to opencode.</p>\
                                         <script>window.close();</script></body></html>";

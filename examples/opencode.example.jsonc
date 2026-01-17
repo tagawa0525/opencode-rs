@@ -1,0 +1,51 @@
+{
+  "theme": "dark",
+  "model": "anthropic/claude-3-5-sonnet-20241022",
+  
+  "command": {
+    "explain": {
+      "template": "Explain $1 in detail with clear examples and use cases. Break down complex concepts into simpler parts.",
+      "description": "Explain a topic in detail with examples"
+    },
+    
+    "review": {
+      "template": "Review the following code for:\n- Best practices and code quality\n- Potential bugs and edge cases\n- Performance improvements\n- Security concerns\n\nCode:\n$ARGUMENTS",
+      "description": "Review code for quality, bugs, and improvements"
+    },
+    
+    "translate": {
+      "template": "Translate the following text from $1 to $2:\n\n$3",
+      "description": "Translate text between languages"
+    },
+    
+    "refactor": {
+      "template": "Refactor the following code to improve readability, maintainability, and performance:\n\n$ARGUMENTS",
+      "description": "Refactor code for better quality"
+    },
+    
+    "test": {
+      "template": "Write comprehensive unit tests for the following code:\n\n$ARGUMENTS",
+      "description": "Generate unit tests for code"
+    },
+    
+    "docs": {
+      "template": "Write clear, comprehensive documentation for the following code:\n\n$ARGUMENTS",
+      "description": "Generate documentation for code"
+    },
+    
+    "optimize": {
+      "template": "Analyze and optimize the following code for performance:\n\n$ARGUMENTS",
+      "description": "Optimize code for performance"
+    },
+    
+    "debug": {
+      "template": "Help me debug this issue: $ARGUMENTS",
+      "description": "Get help debugging an issue"
+    },
+    
+    "summarize": {
+      "template": "Summarize the following in a concise way:\n\n$ARGUMENTS",
+      "description": "Summarize content"
+    }
+  }
+}

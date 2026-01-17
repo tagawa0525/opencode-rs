@@ -115,7 +115,9 @@ fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &super::theme::
     frame.render_widget(block, dialog_area);
 
     match dialog.dialog_type {
-        DialogType::ModelSelector | DialogType::ProviderSelector | DialogType::AuthMethodSelector => {
+        DialogType::ModelSelector
+        | DialogType::ProviderSelector
+        | DialogType::AuthMethodSelector => {
             render_select_dialog(frame, dialog, theme, inner);
         }
         DialogType::ApiKeyInput => {
@@ -305,7 +307,11 @@ fn render_device_code_dialog(
         frame.render_widget(url_label, chunks[2]);
 
         let url = Paragraph::new(uri.as_str())
-            .style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(Alignment::Center);
         frame.render_widget(url, chunks[3]);
     }

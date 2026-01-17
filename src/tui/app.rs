@@ -17,6 +17,10 @@ use super::ui;
 use crate::config::Config;
 use crate::provider::{self, Model, Provider, StreamEvent};
 use crate::session::{CreateSessionOptions, Session};
+use crate::slash_command::{
+    builtin::*, parser::ParsedCommand, registry::CommandRegistry, template::TemplateCommand,
+    CommandContext,
+};
 use crate::tool;
 
 /// Display message in the UI
@@ -107,6 +111,8 @@ pub struct App {
     pub available_providers: Vec<Provider>,
     /// All providers cache
     pub all_providers: Vec<Provider>,
+    /// Slash command registry
+    pub command_registry: std::sync::Arc<CommandRegistry>,
 }
 
 impl Default for App {
@@ -132,6 +138,7 @@ impl Default for App {
             dialog: None,
             available_providers: Vec::new(),
             all_providers: Vec::new(),
+            command_registry: std::sync::Arc::new(CommandRegistry::new()),
         }
     }
 }
@@ -251,6 +258,9 @@ impl App {
                 _ => Theme::dark(),
             };
         }
+
+        // Initialize slash commands
+        app.init_commands(&config).await;
 
         Ok(app)
     }
@@ -538,6 +548,33 @@ impl App {
         }
     }
 
+    /// Initialize slash commands
+    async fn init_commands(&mut self, config: &Config) {
+        // Register built-in commands
+        self.command_registry
+            .register(std::sync::Arc::new(HelpCommand))
+            .await;
+        self.command_registry
+            .register(std::sync::Arc::new(ClearCommand))
+            .await;
+        self.command_registry
+            .register(std::sync::Arc::new(ModelCommand))
+            .await;
+        self.command_registry
+            .register(std::sync::Arc::new(AgentCommand))
+            .await;
+
+        // Register custom commands from config
+        if let Some(commands) = &config.command {
+            for (name, cmd_config) in commands {
+                let template_cmd = TemplateCommand::new(name.clone(), cmd_config.clone());
+                self.command_registry
+                    .register(std::sync::Arc::new(template_cmd))
+                    .await;
+            }
+        }
+    }
+
     /// Append to the last assistant message
     pub fn append_to_assistant(&mut self, delta: &str) {
         if let Some(msg) = self.messages.last_mut() {
@@ -669,6 +706,163 @@ async fn run_app(
                         }
 
                         if let Some(input) = app.take_input() {
+                            // Check if this is a slash command
+                            if let Some(parsed) = ParsedCommand::parse(&input) {
+                                // Execute slash command
+                                let ctx = CommandContext {
+                                    session_id: app
+                                        .session
+                                        .as_ref()
+                                        .map(|s| s.id.clone())
+                                        .unwrap_or_default(),
+                                    cwd: std::env::current_dir()
+                                        .ok()
+                                        .and_then(|p| p.to_str().map(String::from))
+                                        .unwrap_or_else(|| ".".to_string()),
+                                    root: std::env::current_dir()
+                                        .ok()
+                                        .and_then(|p| p.to_str().map(String::from))
+                                        .unwrap_or_else(|| ".".to_string()),
+                                    extra: Default::default(),
+                                };
+
+                                let registry = app.command_registry.clone();
+                                match registry.execute(&parsed.name, &parsed.args, &ctx).await {
+                                    Ok(output) => {
+                                        // Handle special commands
+                                        if parsed.name == "clear" || parsed.name == "new" {
+                                            // Create new session
+                                            match Session::create(CreateSessionOptions::default())
+                                                .await
+                                            {
+                                                Ok(session) => {
+                                                    app.session_title = session.title.clone();
+                                                    app.session_slug = session.slug.clone();
+                                                    app.session = Some(session);
+                                                    app.messages.clear();
+                                                    app.total_cost = 0.0;
+                                                    app.total_tokens = 0;
+                                                    app.status = "Session cleared".to_string();
+                                                }
+                                                Err(e) => {
+                                                    app.status =
+                                                        format!("Error creating session: {}", e);
+                                                }
+                                            }
+                                            continue;
+                                        }
+
+                                        // Handle model switch
+                                        if let Some(model) = &output.model {
+                                            if let Some((provider_id, model_id)) =
+                                                provider::parse_model_string(model)
+                                            {
+                                                app.provider_id = provider_id.clone();
+                                                app.model_id = model_id.clone();
+                                                app.model_display =
+                                                    format!("{}/{}", provider_id, model_id);
+                                                app.model_configured = true;
+                                                app.status =
+                                                    format!("Switched to model: {}", model);
+                                            }
+                                            continue;
+                                        }
+
+                                        // Handle agent switch
+                                        if let Some(_agent) = &output.agent {
+                                            // TODO: Implement agent switching
+                                            app.status =
+                                                format!("Agent switching not yet implemented");
+                                            continue;
+                                        }
+
+                                        // Display command output if not empty
+                                        if !output.text.is_empty() {
+                                            app.add_message("system", &output.text);
+                                        }
+
+                                        // If the command wants to submit to LLM, do it
+                                        if output.submit_to_llm {
+                                            app.is_processing = true;
+                                            app.status = "Processing".to_string();
+
+                                            // Add empty assistant message
+                                            app.add_message("assistant", "");
+
+                                            // Start streaming
+                                            let tx = event_tx.clone();
+                                            let provider_id = app.provider_id.clone();
+                                            let model_id = app.model_id.clone();
+                                            let prompt = output.text.clone();
+
+                                            tokio::spawn(async move {
+                                                match stream_response(
+                                                    &provider_id,
+                                                    &model_id,
+                                                    &prompt,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(mut rx) => {
+                                                        while let Some(event) = rx.recv().await {
+                                                            match event {
+                                                                StreamEvent::TextDelta(text) => {
+                                                                    let _ = tx
+                                                                        .send(
+                                                                            AppEvent::StreamDelta(
+                                                                                text,
+                                                                            ),
+                                                                        )
+                                                                        .await;
+                                                                }
+                                                                StreamEvent::Done { .. } => {
+                                                                    let _ = tx
+                                                                        .send(AppEvent::StreamDone)
+                                                                        .await;
+                                                                }
+                                                                StreamEvent::Error(err) => {
+                                                                    let _ = tx
+                                                                        .send(
+                                                                            AppEvent::StreamError(
+                                                                                err,
+                                                                            ),
+                                                                        )
+                                                                        .await;
+                                                                }
+                                                                StreamEvent::ToolCallStart {
+                                                                    name,
+                                                                    ..
+                                                                } => {
+                                                                    let _ = tx
+                                                                        .send(AppEvent::ToolCall(
+                                                                            name,
+                                                                            String::new(),
+                                                                        ))
+                                                                        .await;
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx
+                                                            .send(AppEvent::StreamError(
+                                                                e.to_string(),
+                                                            ))
+                                                            .await;
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.add_message("system", &format!("Error: {}", e));
+                                    }
+                                }
+                                continue;
+                            }
+
+                            // Normal user message (not a slash command)
                             // Add user message
                             app.add_message("user", &input);
                             app.is_processing = true;
@@ -763,7 +957,10 @@ async fn run_app(
                     app.all_providers = provider::registry().list().await;
                     app.available_providers = provider::registry().list_available().await;
                     app.close_dialog();
-                    app.add_message("system", &format!("Successfully connected to {}!", provider_id));
+                    app.add_message(
+                        "system",
+                        &format!("Successfully connected to {}!", provider_id),
+                    );
                     app.open_model_selector();
                 }
                 AppEvent::OAuthError(err) => {
@@ -942,10 +1139,7 @@ async fn handle_dialog_input(
                     if let Some(dialog) = &app.dialog {
                         if let Some(item) = dialog.selected_item() {
                             let auth_method = item.id.clone();
-                            let provider_id = item
-                                .provider_id
-                                .clone()
-                                .unwrap_or_default();
+                            let provider_id = item.provider_id.clone().unwrap_or_default();
 
                             match auth_method.as_str() {
                                 "oauth" => {
@@ -1226,10 +1420,14 @@ async fn handle_openai_callback(
                 Ok(tokens) => {
                     // Save tokens
                     let token_info = oauth::OAuthTokenInfo::new_openai(tokens);
-                    if let Err(e) = crate::auth::save_oauth_token("openai", token_info.clone()).await
+                    if let Err(e) =
+                        crate::auth::save_oauth_token("openai", token_info.clone()).await
                     {
                         let _ = tx
-                            .send(AppEvent::OAuthError(format!("Failed to save tokens: {}", e)))
+                            .send(AppEvent::OAuthError(format!(
+                                "Failed to save tokens: {}",
+                                e
+                            )))
                             .await;
                         return;
                     }

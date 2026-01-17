@@ -10,6 +10,7 @@ mod id;
 mod oauth;
 mod provider;
 mod session;
+mod slash_command;
 mod storage;
 mod tool;
 mod tui;
