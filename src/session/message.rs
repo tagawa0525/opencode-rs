@@ -668,3 +668,335 @@ pub struct PartRemoved {
     pub part_id: String,
 }
 impl Event for PartRemoved {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod message_role {
+        use super::*;
+
+        #[test]
+        fn test_serialize_user() {
+            let role = MessageRole::User;
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, r#""user""#);
+        }
+
+        #[test]
+        fn test_serialize_assistant() {
+            let role = MessageRole::Assistant;
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, r#""assistant""#);
+        }
+
+        #[test]
+        fn test_deserialize_user() {
+            let role: MessageRole = serde_json::from_str(r#""user""#).unwrap();
+            assert_eq!(role, MessageRole::User);
+        }
+
+        #[test]
+        fn test_deserialize_assistant() {
+            let role: MessageRole = serde_json::from_str(r#""assistant""#).unwrap();
+            assert_eq!(role, MessageRole::Assistant);
+        }
+    }
+
+    mod message {
+        use super::*;
+
+        #[test]
+        fn test_user_message_creation() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let msg = Message::user("session_123", "default", model);
+
+            assert!(msg.id.starts_with("msg_"));
+            assert_eq!(msg.session_id, "session_123");
+            assert_eq!(msg.agent, "default");
+            assert_eq!(msg.model.provider_id, "anthropic");
+        }
+
+        #[test]
+        fn test_assistant_message_creation() {
+            let path = MessagePath {
+                cwd: "/home/user".to_string(),
+                root: "/home/user/project".to_string(),
+            };
+            let msg = Message::assistant(
+                "session_123",
+                "msg_parent",
+                "default",
+                "anthropic",
+                "claude-3-5-sonnet",
+                path,
+            );
+
+            assert!(msg.id.starts_with("msg_"));
+            assert_eq!(msg.session_id, "session_123");
+            assert_eq!(msg.parent_id, "msg_parent");
+            assert_eq!(msg.provider_id, "anthropic");
+            assert_eq!(msg.model_id, "claude-3-5-sonnet");
+        }
+
+        #[test]
+        fn test_message_id() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model.clone()));
+
+            let path = MessagePath {
+                cwd: "/home/user".to_string(),
+                root: "/home/user/project".to_string(),
+            };
+            let assistant_msg = Message::Assistant(Message::assistant(
+                "session_123",
+                "msg_parent",
+                "default",
+                "anthropic",
+                "claude-3-5-sonnet",
+                path,
+            ));
+
+            assert!(user_msg.id().starts_with("msg_"));
+            assert!(assistant_msg.id().starts_with("msg_"));
+        }
+
+        #[test]
+        fn test_message_role() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model));
+
+            assert_eq!(user_msg.role(), MessageRole::User);
+        }
+
+        #[test]
+        fn test_message_serialize_deserialize() {
+            let model = ModelRef {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+            };
+            let user_msg = Message::User(Message::user("session_123", "default", model));
+
+            let json = serde_json::to_string(&user_msg).unwrap();
+            let parsed: Message = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(parsed.id(), user_msg.id());
+            assert_eq!(parsed.session_id(), user_msg.session_id());
+        }
+    }
+
+    mod part {
+        use super::*;
+
+        #[test]
+        fn test_text_part_creation() {
+            let part = Part::text("session_123", "msg_456", "Hello world".to_string());
+
+            match part {
+                Part::Text(text_part) => {
+                    assert!(text_part.base.id.starts_with("prt_"));
+                    assert_eq!(text_part.base.session_id, "session_123");
+                    assert_eq!(text_part.base.message_id, "msg_456");
+                    assert_eq!(text_part.text, "Hello world");
+                }
+                _ => panic!("Expected Text part"),
+            }
+        }
+
+        #[test]
+        fn test_tool_part_creation() {
+            let part = Part::tool(
+                "session_123",
+                "msg_456",
+                "bash".to_string(),
+                "call_789".to_string(),
+            );
+
+            match part {
+                Part::Tool(tool_part) => {
+                    assert!(tool_part.base.id.starts_with("prt_"));
+                    assert_eq!(tool_part.tool, "bash");
+                    assert_eq!(tool_part.call_id, "call_789");
+                    assert!(matches!(tool_part.state, ToolState::Pending(_)));
+                }
+                _ => panic!("Expected Tool part"),
+            }
+        }
+
+        #[test]
+        fn test_part_id() {
+            let text_part = Part::text("session_123", "msg_456", "Hello".to_string());
+            let tool_part = Part::tool(
+                "session_123",
+                "msg_456",
+                "bash".to_string(),
+                "call_789".to_string(),
+            );
+
+            assert!(text_part.id().starts_with("prt_"));
+            assert!(tool_part.id().starts_with("prt_"));
+        }
+
+        #[test]
+        fn test_part_message_id() {
+            let part = Part::text("session_123", "msg_456", "Hello".to_string());
+            assert_eq!(part.message_id(), "msg_456");
+        }
+
+        #[test]
+        fn test_part_session_id() {
+            let part = Part::text("session_123", "msg_456", "Hello".to_string());
+            assert_eq!(part.session_id(), "session_123");
+        }
+    }
+
+    mod tool_state {
+        use super::*;
+
+        #[test]
+        fn test_pending_state_serialize() {
+            let state = ToolState::Pending(ToolStatePending {
+                input: serde_json::json!({"cmd": "ls"}),
+                raw: r#"{"cmd": "ls"}"#.to_string(),
+            });
+
+            let json = serde_json::to_string(&state).unwrap();
+            assert!(json.contains(r#""status":"pending""#));
+        }
+
+        #[test]
+        fn test_running_state_serialize() {
+            let state = ToolState::Running(ToolStateRunning {
+                input: serde_json::json!({"cmd": "ls"}),
+                title: Some("Running bash".to_string()),
+                metadata: None,
+                time: ToolTimeStart { start: 1000 },
+            });
+
+            let json = serde_json::to_string(&state).unwrap();
+            assert!(json.contains(r#""status":"running""#));
+        }
+
+        #[test]
+        fn test_completed_state_serialize() {
+            let state = ToolState::Completed(ToolStateCompleted {
+                input: serde_json::json!({"cmd": "ls"}),
+                output: "file.txt".to_string(),
+                title: "Listed files".to_string(),
+                metadata: std::collections::HashMap::new(),
+                time: ToolTimeComplete {
+                    start: 1000,
+                    end: 2000,
+                    compacted: None,
+                },
+                attachments: None,
+            });
+
+            let json = serde_json::to_string(&state).unwrap();
+            assert!(json.contains(r#""status":"completed""#));
+        }
+
+        #[test]
+        fn test_error_state_serialize() {
+            let state = ToolState::Error(ToolStateError {
+                input: serde_json::json!({"cmd": "rm -rf /"}),
+                error: "Permission denied".to_string(),
+                metadata: None,
+                time: ToolTimeComplete {
+                    start: 1000,
+                    end: 2000,
+                    compacted: None,
+                },
+            });
+
+            let json = serde_json::to_string(&state).unwrap();
+            assert!(json.contains(r#""status":"error""#));
+        }
+    }
+
+    mod message_error {
+        use super::*;
+
+        #[test]
+        fn test_auth_error_serialize() {
+            let error = MessageError::AuthError {
+                provider_id: "anthropic".to_string(),
+                message: "Invalid API key".to_string(),
+            };
+
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"ProviderAuthError""#));
+        }
+
+        #[test]
+        fn test_api_error_serialize() {
+            let error = MessageError::ApiError {
+                message: "Rate limit exceeded".to_string(),
+                status_code: Some(429),
+                is_retryable: true,
+                response_headers: None,
+                response_body: None,
+            };
+
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"APIError""#));
+            assert!(json.contains(r#""status_code":429"#));
+        }
+
+        #[test]
+        fn test_output_length_error_serialize() {
+            let error = MessageError::OutputLengthError {};
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"MessageOutputLengthError""#));
+        }
+
+        #[test]
+        fn test_aborted_error_serialize() {
+            let error = MessageError::AbortedError {
+                message: "User cancelled".to_string(),
+            };
+            let json = serde_json::to_string(&error).unwrap();
+            assert!(json.contains(r#""name":"MessageAbortedError""#));
+        }
+    }
+
+    mod token_usage {
+        use super::*;
+
+        #[test]
+        fn test_default() {
+            let usage = TokenUsage::default();
+            assert_eq!(usage.input, 0);
+            assert_eq!(usage.output, 0);
+            assert_eq!(usage.reasoning, 0);
+            assert_eq!(usage.cache.read, 0);
+            assert_eq!(usage.cache.write, 0);
+        }
+
+        #[test]
+        fn test_serialize_deserialize() {
+            let usage = TokenUsage {
+                input: 100,
+                output: 50,
+                reasoning: 10,
+                cache: CacheUsage { read: 5, write: 3 },
+            };
+
+            let json = serde_json::to_string(&usage).unwrap();
+            let parsed: TokenUsage = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(parsed.input, 100);
+            assert_eq!(parsed.output, 50);
+            assert_eq!(parsed.cache.read, 5);
+        }
+    }
+}
