@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -830,6 +830,43 @@ impl App {
         }
     }
 
+    /// Copy text to clipboard using both OSC 52 and system clipboard
+    fn copy_to_clipboard(&self, text: &str) -> Result<()> {
+        // Use OSC 52 for terminal clipboard integration
+        self.copy_via_osc52(text)?;
+
+        // Also try system clipboard
+        use arboard::Clipboard;
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+
+        Ok(())
+    }
+
+    /// Copy text to clipboard using OSC 52 escape sequence
+    fn copy_via_osc52(&self, text: &str) -> Result<()> {
+        use base64::Engine;
+        let base64_text = base64::engine::general_purpose::STANDARD.encode(text);
+        let osc52 = format!("\x1b]52;c;{}\x07", base64_text);
+
+        // Check if running in tmux
+        let osc52_final = if std::env::var("TMUX").is_ok() {
+            // Wrap OSC 52 for tmux
+            format!("\x1bPtmux;\x1b{}\x1b\\", osc52)
+        } else {
+            osc52
+        };
+
+        // Write to stdout
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        stdout.write_all(osc52_final.as_bytes())?;
+        stdout.flush()?;
+
+        Ok(())
+    }
+
     /// Initialize slash commands
     async fn init_commands(&mut self, config: &Config) {
         // Register built-in commands
@@ -881,7 +918,7 @@ pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Resul
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -913,11 +950,7 @@ pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Resul
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
@@ -972,190 +1005,196 @@ async fn run_app(
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
 
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                // Handle autocomplete input if autocomplete is open
-                if app.autocomplete.is_some() {
-                    match key.code {
-                        KeyCode::Up => {
-                            if let Some(autocomplete) = &mut app.autocomplete {
-                                autocomplete.move_up();
+            match event::read()? {
+                Event::Key(key) => {
+                    // Handle autocomplete input if autocomplete is open
+                    if app.autocomplete.is_some() {
+                        match key.code {
+                            KeyCode::Up => {
+                                if let Some(autocomplete) = &mut app.autocomplete {
+                                    autocomplete.move_up();
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                        KeyCode::Down => {
-                            if let Some(autocomplete) = &mut app.autocomplete {
-                                autocomplete.move_down();
+                            KeyCode::Down => {
+                                if let Some(autocomplete) = &mut app.autocomplete {
+                                    autocomplete.move_down();
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                        KeyCode::Enter | KeyCode::Tab => {
-                            // Execute the selected command immediately
-                            if let Some(command_name) = app.insert_autocomplete_selection() {
-                                // Execute slash command
-                                let ctx = CommandContext {
-                                    session_id: app
-                                        .session
-                                        .as_ref()
-                                        .map(|s| s.id.clone())
-                                        .unwrap_or_default(),
-                                    cwd: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    root: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    extra: Default::default(),
-                                };
+                            KeyCode::Enter | KeyCode::Tab => {
+                                // Execute the selected command immediately
+                                if let Some(command_name) = app.insert_autocomplete_selection() {
+                                    // Execute slash command
+                                    let ctx = CommandContext {
+                                        session_id: app
+                                            .session
+                                            .as_ref()
+                                            .map(|s| s.id.clone())
+                                            .unwrap_or_default(),
+                                        cwd: std::env::current_dir()
+                                            .ok()
+                                            .and_then(|p| p.to_str().map(String::from))
+                                            .unwrap_or_else(|| ".".to_string()),
+                                        root: std::env::current_dir()
+                                            .ok()
+                                            .and_then(|p| p.to_str().map(String::from))
+                                            .unwrap_or_else(|| ".".to_string()),
+                                        extra: Default::default(),
+                                    };
 
-                                let registry = app.command_registry.clone();
-                                match registry.execute(&command_name, "", &ctx).await {
-                                    Ok(output) => {
-                                        handle_command_output(
-                                            app,
-                                            &command_name,
-                                            output,
-                                            event_tx.clone(),
-                                        )
-                                        .await?;
-                                    }
-                                    Err(e) => {
-                                        app.add_message("system", &format!("Error: {}", e));
+                                    let registry = app.command_registry.clone();
+                                    match registry.execute(&command_name, "", &ctx).await {
+                                        Ok(output) => {
+                                            handle_command_output(
+                                                app,
+                                                &command_name,
+                                                output,
+                                                event_tx.clone(),
+                                            )
+                                            .await?;
+                                        }
+                                        Err(e) => {
+                                            app.add_message("system", &format!("Error: {}", e));
+                                        }
                                     }
                                 }
+                                continue;
                             }
-                            continue;
-                        }
-                        KeyCode::Esc => {
-                            app.hide_autocomplete();
-                            continue;
-                        }
-                        _ => {
-                            // Let the normal input handling process the key
-                            // but we'll update autocomplete after
+                            KeyCode::Esc => {
+                                app.hide_autocomplete();
+                                continue;
+                            }
+                            _ => {
+                                // Let the normal input handling process the key
+                                // but we'll update autocomplete after
+                            }
                         }
                     }
-                }
 
-                // Handle dialog input if dialog is open
-                if app.dialog.is_some() {
-                    handle_dialog_input(app, key, event_tx.clone()).await?;
-                } else {
-                    let action = key_to_action(key);
+                    // Handle dialog input if dialog is open
+                    if app.dialog.is_some() {
+                        handle_dialog_input(app, key, event_tx.clone()).await?;
+                    } else {
+                        let action = key_to_action(key);
 
-                    // Check for model selector keybind (Ctrl+M)
-                    if key.code == KeyCode::Char('m') && key.modifiers == KeyModifiers::CONTROL {
-                        app.open_model_selector();
-                        continue;
-                    }
-
-                    // Check for provider selector keybind (Ctrl+P)
-                    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
-                        app.open_provider_selector();
-                        continue;
-                    }
-
-                    if action == Action::Submit && !app.is_processing {
-                        // Check if model is configured
-                        if !app.is_ready() {
+                        // Check for model selector keybind (Ctrl+M)
+                        if key.code == KeyCode::Char('m') && key.modifiers == KeyModifiers::CONTROL
+                        {
                             app.open_model_selector();
                             continue;
                         }
 
-                        if let Some(input) = app.take_input() {
-                            // Check if input is just "/" - show help for slash commands
-                            if input.trim() == "/" {
-                                // Show available slash commands
-                                let commands = app.command_registry.list().await;
-                                let mut help_text = String::from("Available slash commands:\n\n");
-                                for cmd in commands {
-                                    help_text.push_str(&format!(
-                                        "  /{} - {}\n",
-                                        cmd.name, cmd.description
-                                    ));
-                                }
-                                help_text.push_str("\nType /help for more information.");
-                                app.add_message("system", &help_text);
-                                continue;
-                            }
-
-                            // Check if this is a slash command
-                            if let Some(parsed) = ParsedCommand::parse(&input) {
-                                // Execute slash command
-                                let ctx = CommandContext {
-                                    session_id: app
-                                        .session
-                                        .as_ref()
-                                        .map(|s| s.id.clone())
-                                        .unwrap_or_default(),
-                                    cwd: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    root: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    extra: Default::default(),
-                                };
-
-                                let registry = app.command_registry.clone();
-                                match registry.execute(&parsed.name, &parsed.args, &ctx).await {
-                                    Ok(output) => {
-                                        handle_command_output(
-                                            app,
-                                            &parsed.name,
-                                            output,
-                                            event_tx.clone(),
-                                        )
-                                        .await?;
-                                    }
-                                    Err(e) => {
-                                        app.add_message("system", &format!("Error: {}", e));
-                                    }
-                                }
-                                continue;
-                            }
-
-                            // Normal user message (not a slash command)
-                            // Add user message
-                            app.add_message("user", &input);
-                            app.is_processing = true;
-                            app.status = "Processing".to_string();
-
-                            // Add empty assistant message
-                            app.add_message("assistant", "");
-
-                            // Start agentic loop
-                            let tx = event_tx.clone();
-                            let provider_id = app.provider_id.clone();
-                            let model_id = app.model_id.clone();
-                            let prompt = input.clone();
-
-                            tokio::spawn(async move {
-                                if let Err(e) = stream_response_agentic(
-                                    provider_id,
-                                    model_id,
-                                    prompt,
-                                    tx.clone(),
-                                )
-                                .await
-                                {
-                                    let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
-                                }
-                            });
+                        // Check for provider selector keybind (Ctrl+P)
+                        if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL
+                        {
+                            app.open_provider_selector();
+                            continue;
                         }
-                    } else if action == Action::Cancel && app.is_processing {
-                        // Cancel processing
-                        app.is_processing = false;
-                        app.status = "Ready".to_string();
-                    } else {
-                        app.handle_action(action);
-                        // Update autocomplete after input changes
-                        app.update_autocomplete().await;
+
+                        if action == Action::Submit && !app.is_processing {
+                            // Check if model is configured
+                            if !app.is_ready() {
+                                app.open_model_selector();
+                                continue;
+                            }
+
+                            if let Some(input) = app.take_input() {
+                                // Check if input is just "/" - show help for slash commands
+                                if input.trim() == "/" {
+                                    // Show available slash commands
+                                    let commands = app.command_registry.list().await;
+                                    let mut help_text =
+                                        String::from("Available slash commands:\n\n");
+                                    for cmd in commands {
+                                        help_text.push_str(&format!(
+                                            "  /{} - {}\n",
+                                            cmd.name, cmd.description
+                                        ));
+                                    }
+                                    help_text.push_str("\nType /help for more information.");
+                                    app.add_message("system", &help_text);
+                                    continue;
+                                }
+
+                                // Check if this is a slash command
+                                if let Some(parsed) = ParsedCommand::parse(&input) {
+                                    // Execute slash command
+                                    let ctx = CommandContext {
+                                        session_id: app
+                                            .session
+                                            .as_ref()
+                                            .map(|s| s.id.clone())
+                                            .unwrap_or_default(),
+                                        cwd: std::env::current_dir()
+                                            .ok()
+                                            .and_then(|p| p.to_str().map(String::from))
+                                            .unwrap_or_else(|| ".".to_string()),
+                                        root: std::env::current_dir()
+                                            .ok()
+                                            .and_then(|p| p.to_str().map(String::from))
+                                            .unwrap_or_else(|| ".".to_string()),
+                                        extra: Default::default(),
+                                    };
+
+                                    let registry = app.command_registry.clone();
+                                    match registry.execute(&parsed.name, &parsed.args, &ctx).await {
+                                        Ok(output) => {
+                                            handle_command_output(
+                                                app,
+                                                &parsed.name,
+                                                output,
+                                                event_tx.clone(),
+                                            )
+                                            .await?;
+                                        }
+                                        Err(e) => {
+                                            app.add_message("system", &format!("Error: {}", e));
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                // Normal user message (not a slash command)
+                                // Add user message
+                                app.add_message("user", &input);
+                                app.is_processing = true;
+                                app.status = "Processing".to_string();
+
+                                // Add empty assistant message
+                                app.add_message("assistant", "");
+
+                                // Start agentic loop
+                                let tx = event_tx.clone();
+                                let provider_id = app.provider_id.clone();
+                                let model_id = app.model_id.clone();
+                                let prompt = input.clone();
+
+                                tokio::spawn(async move {
+                                    if let Err(e) = stream_response_agentic(
+                                        provider_id,
+                                        model_id,
+                                        prompt,
+                                        tx.clone(),
+                                    )
+                                    .await
+                                    {
+                                        let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
+                                    }
+                                });
+                            }
+                        } else if action == Action::Cancel && app.is_processing {
+                            // Cancel processing
+                            app.is_processing = false;
+                            app.status = "Ready".to_string();
+                        } else {
+                            app.handle_action(action);
+                            // Update autocomplete after input changes
+                            app.update_autocomplete().await;
+                        }
                     }
                 }
+                _ => {}
             }
         }
 
