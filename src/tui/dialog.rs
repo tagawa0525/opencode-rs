@@ -201,6 +201,291 @@ impl App {
     }
 }
 
+// ============================================================================
+// Dialog Input Handlers
+// ============================================================================
+
+/// Handle input for model/provider selector dialogs
+async fn handle_selector_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => {
+            // Close dialog, but if model not configured, quit
+            if !app.model_configured
+                && app.dialog.as_ref().map(|d| &d.dialog_type) == Some(&DialogType::ModelSelector)
+            {
+                app.should_quit = true;
+            }
+            app.close_dialog();
+        }
+        KeyCode::Enter => {
+            handle_selector_enter(app).await?;
+        }
+        KeyCode::Up => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_down();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.search_query.push(c);
+                dialog.update_filter();
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.search_query.pop();
+                dialog.update_filter();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle Enter key in selector dialogs
+async fn handle_selector_enter(app: &mut App) -> Result<()> {
+    let (item_id, dialog_type) = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        let item = match dialog.selected_item() {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        (item.id.clone(), dialog.dialog_type.clone())
+    };
+
+    match dialog_type {
+        DialogType::ModelSelector => {
+            if let Some((provider_id, model_id)) = provider::parse_model_string(&item_id) {
+                app.set_model(&provider_id, &model_id).await?;
+            }
+        }
+        DialogType::ProviderSelector => {
+            let has_key = app
+                .all_providers
+                .iter()
+                .find(|p| p.id == item_id)
+                .map(|p| p.key.is_some())
+                .unwrap_or(false);
+
+            if has_key {
+                app.close_dialog();
+                app.open_model_selector();
+            } else {
+                app.open_auth_method_selector(&item_id);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle input for API key input dialog
+async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => {
+            app.open_provider_selector();
+        }
+        KeyCode::Enter => {
+            handle_api_key_submit(app).await?;
+        }
+        KeyCode::Char(c) => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.input_value.push(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.input_value.pop();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle API key submission
+async fn handle_api_key_submit(app: &mut App) -> Result<()> {
+    let (api_key, provider_id, env_var) = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        let first_item = match dialog.items.first() {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        (
+            dialog.input_value.clone(),
+            first_item.id.clone(),
+            first_item.label.clone(),
+        )
+    };
+
+    if api_key.is_empty() {
+        return Ok(());
+    }
+
+    // Set environment variable for current session
+    std::env::set_var(&env_var, &api_key);
+
+    // Re-initialize registry
+    let config = Config::load().await?;
+    provider::registry().initialize(&config).await?;
+
+    // Update cached providers
+    app.all_providers = provider::registry().list().await;
+    app.available_providers = provider::registry().list_available().await;
+
+    // Close dialog and open model selector
+    app.close_dialog();
+    app.open_model_selector();
+
+    // Save to auth file
+    if let Err(e) = crate::auth::save_api_key(&provider_id, &api_key).await {
+        eprintln!("Warning: Failed to save API key: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Handle input for auth method selector dialog
+async fn handle_auth_method_input(
+    app: &mut App,
+    key_code: KeyCode,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => {
+            app.open_provider_selector();
+        }
+        KeyCode::Enter => {
+            handle_auth_method_enter(app, event_tx).await;
+        }
+        KeyCode::Up => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_down();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle Enter key in auth method selector
+async fn handle_auth_method_enter(app: &mut App, event_tx: &mpsc::Sender<AppEvent>) {
+    let (auth_method, provider_id) = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return,
+        };
+        let item = match dialog.selected_item() {
+            Some(i) => i,
+            None => return,
+        };
+        (
+            item.id.clone(),
+            item.provider_id.clone().unwrap_or_default(),
+        )
+    };
+
+    match auth_method.as_str() {
+        "oauth" => {
+            start_oauth_flow(app, &provider_id, event_tx);
+        }
+        "api_key" => {
+            app.open_api_key_input(&provider_id);
+        }
+        _ => {}
+    }
+}
+
+/// Start OAuth flow for a provider
+fn start_oauth_flow(app: &mut App, provider_id: &str, event_tx: &mpsc::Sender<AppEvent>) {
+    match provider_id {
+        "copilot" => {
+            app.start_copilot_oauth();
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                start_copilot_oauth_flow(tx).await;
+            });
+        }
+        "openai" => {
+            app.start_openai_oauth();
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                start_openai_oauth_flow(tx).await;
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Handle input for permission request dialog
+async fn handle_permission_input(
+    app: &mut App,
+    key_code: KeyCode,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    let permission_id = app
+        .dialog
+        .as_ref()
+        .and_then(|d| d.permission_request.as_ref())
+        .map(|r| r.id.clone());
+
+    let id = match permission_id {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    match key_code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            app.close_dialog();
+            let _ = event_tx
+                .send(AppEvent::PermissionResponse {
+                    id,
+                    allow: true,
+                    always: false,
+                })
+                .await;
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            app.close_dialog();
+            let _ = event_tx
+                .send(AppEvent::PermissionResponse {
+                    id,
+                    allow: true,
+                    always: true,
+                })
+                .await;
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.close_dialog();
+            let _ = event_tx
+                .send(AppEvent::PermissionResponse {
+                    id,
+                    allow: false,
+                    always: false,
+                })
+                .await;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Handle input when a dialog is open
 pub async fn handle_dialog_input(
     app: &mut App,
@@ -211,254 +496,21 @@ pub async fn handle_dialog_input(
 
     match dialog_type {
         Some(DialogType::ModelSelector) | Some(DialogType::ProviderSelector) => {
-            match key.code {
-                KeyCode::Esc => {
-                    // Close dialog, but if model not configured, quit
-                    if !app.model_configured
-                        && app.dialog.as_ref().map(|d| &d.dialog_type)
-                            == Some(&DialogType::ModelSelector)
-                    {
-                        app.should_quit = true;
-                    }
-                    app.close_dialog();
-                }
-                KeyCode::Enter => {
-                    // Select item
-                    if let Some(dialog) = &app.dialog {
-                        if let Some(item) = dialog.selected_item() {
-                            let item_id = item.id.clone();
-                            let dialog_type = dialog.dialog_type.clone();
-
-                            match dialog_type {
-                                DialogType::ModelSelector => {
-                                    // Parse provider/model from item_id
-                                    if let Some((provider_id, model_id)) =
-                                        provider::parse_model_string(&item_id)
-                                    {
-                                        app.set_model(&provider_id, &model_id).await?;
-                                    }
-                                }
-                                DialogType::ProviderSelector => {
-                                    let provider_id = item_id.clone();
-                                    // Check if provider already has a key
-                                    let has_key = app
-                                        .all_providers
-                                        .iter()
-                                        .find(|p| p.id == provider_id)
-                                        .map(|p| p.key.is_some())
-                                        .unwrap_or(false);
-
-                                    if has_key {
-                                        // Provider connected, open model selector
-                                        app.close_dialog();
-                                        app.open_model_selector();
-                                    } else {
-                                        // Show auth method selector for providers with OAuth
-                                        app.open_auth_method_selector(&provider_id);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                KeyCode::Up => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.move_up();
-                    }
-                }
-                KeyCode::Down => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.move_down();
-                    }
-                }
-                KeyCode::Char(c) => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.search_query.push(c);
-                        dialog.update_filter();
-                    }
-                }
-                KeyCode::Backspace => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.search_query.pop();
-                        dialog.update_filter();
-                    }
-                }
-                _ => {}
-            }
+            handle_selector_input(app, key.code).await?;
         }
         Some(DialogType::ApiKeyInput) => {
-            match key.code {
-                KeyCode::Esc => {
-                    // Go back to provider selector
-                    app.open_provider_selector();
-                }
-                KeyCode::Enter => {
-                    // Save API key
-                    if let Some(dialog) = &app.dialog {
-                        let api_key = dialog.input_value.clone();
-                        let provider_id = dialog
-                            .items
-                            .first()
-                            .map(|i| i.id.clone())
-                            .unwrap_or_default();
-                        let env_var = dialog
-                            .items
-                            .first()
-                            .map(|i| i.label.clone())
-                            .unwrap_or_default();
-
-                        if !api_key.is_empty() {
-                            // Set environment variable for current session
-                            std::env::set_var(&env_var, &api_key);
-
-                            // Re-initialize registry
-                            let config = Config::load().await?;
-                            provider::registry().initialize(&config).await?;
-
-                            // Update cached providers
-                            app.all_providers = provider::registry().list().await;
-                            app.available_providers = provider::registry().list_available().await;
-
-                            // Close dialog and open model selector
-                            app.close_dialog();
-                            app.open_model_selector();
-
-                            // Save to auth file
-                            if let Err(e) = crate::auth::save_api_key(&provider_id, &api_key).await
-                            {
-                                // Log error but don't fail
-                                eprintln!("Warning: Failed to save API key: {}", e);
-                            }
-                        }
-                    }
-                }
-                KeyCode::Char(c) => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.input_value.push(c);
-                    }
-                }
-                KeyCode::Backspace => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.input_value.pop();
-                    }
-                }
-                _ => {}
-            }
+            handle_api_key_input(app, key.code).await?;
         }
         Some(DialogType::AuthMethodSelector) => {
-            match key.code {
-                KeyCode::Esc => {
-                    app.open_provider_selector();
-                }
-                KeyCode::Enter => {
-                    if let Some(dialog) = &app.dialog {
-                        if let Some(item) = dialog.selected_item() {
-                            let auth_method = item.id.clone();
-                            let provider_id = item.provider_id.clone().unwrap_or_default();
-
-                            match auth_method.as_str() {
-                                "oauth" => {
-                                    match provider_id.as_str() {
-                                        "copilot" => {
-                                            app.start_copilot_oauth();
-                                            // Start OAuth flow in background
-                                            let tx = event_tx.clone();
-                                            tokio::spawn(async move {
-                                                start_copilot_oauth_flow(tx).await;
-                                            });
-                                        }
-                                        "openai" => {
-                                            app.start_openai_oauth();
-                                            // Start OAuth flow in background
-                                            let tx = event_tx.clone();
-                                            tokio::spawn(async move {
-                                                start_openai_oauth_flow(tx).await;
-                                            });
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                "api_key" => {
-                                    app.open_api_key_input(&provider_id);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                KeyCode::Up => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.move_up();
-                    }
-                }
-                KeyCode::Down => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.move_down();
-                    }
-                }
-                _ => {}
-            }
+            handle_auth_method_input(app, key.code, &event_tx).await?;
         }
         Some(DialogType::OAuthDeviceCode) | Some(DialogType::OAuthWaiting) => {
-            // Only allow Esc to cancel
             if key.code == KeyCode::Esc {
                 app.open_provider_selector();
             }
         }
         Some(DialogType::PermissionRequest) => {
-            // Handle permission dialog input
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    // Allow once
-                    if let Some(dialog) = &app.dialog {
-                        if let Some(req) = &dialog.permission_request {
-                            let id = req.id.clone();
-                            app.close_dialog();
-                            let _ = event_tx
-                                .send(AppEvent::PermissionResponse {
-                                    id,
-                                    allow: true,
-                                    always: false,
-                                })
-                                .await;
-                        }
-                    }
-                }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    // Allow always
-                    if let Some(dialog) = &app.dialog {
-                        if let Some(req) = &dialog.permission_request {
-                            let id = req.id.clone();
-                            app.close_dialog();
-                            let _ = event_tx
-                                .send(AppEvent::PermissionResponse {
-                                    id,
-                                    allow: true,
-                                    always: true,
-                                })
-                                .await;
-                        }
-                    }
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    // Reject
-                    if let Some(dialog) = &app.dialog {
-                        if let Some(req) = &dialog.permission_request {
-                            let id = req.id.clone();
-                            app.close_dialog();
-                            let _ = event_tx
-                                .send(AppEvent::PermissionResponse {
-                                    id,
-                                    allow: false,
-                                    always: false,
-                                })
-                                .await;
-                        }
-                    }
-                }
-                _ => {}
-            }
+            handle_permission_input(app, key.code, &event_tx).await?;
         }
         _ => {
             if key.code == KeyCode::Esc {

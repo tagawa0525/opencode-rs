@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -56,10 +56,8 @@ pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Resul
     // If no model configured, open provider/model selector
     if !app.model_configured {
         if app.available_providers.is_empty() {
-            // No providers with API keys - show provider selector
             app.open_provider_selector();
         } else {
-            // Providers available - show model selector
             app.open_model_selector();
         }
     }
@@ -84,6 +82,290 @@ pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Resul
     result
 }
 
+/// Create a command context from the current app state
+fn create_command_context(app: &App) -> CommandContext {
+    CommandContext {
+        session_id: app
+            .session
+            .as_ref()
+            .map(|s| s.id.clone())
+            .unwrap_or_default(),
+        cwd: std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| ".".to_string()),
+        root: std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| ".".to_string()),
+        extra: Default::default(),
+    }
+}
+
+/// Handle autocomplete key events
+/// Returns true if the event was handled and should not be processed further
+async fn handle_autocomplete_input(
+    app: &mut App,
+    key: KeyEvent,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<bool> {
+    if app.autocomplete.is_none() {
+        return Ok(false);
+    }
+
+    match key.code {
+        KeyCode::Up => {
+            if let Some(autocomplete) = &mut app.autocomplete {
+                autocomplete.move_up();
+            }
+            Ok(true)
+        }
+        KeyCode::Down => {
+            if let Some(autocomplete) = &mut app.autocomplete {
+                autocomplete.move_down();
+            }
+            Ok(true)
+        }
+        KeyCode::Enter | KeyCode::Tab => {
+            if let Some(command_name) = app.insert_autocomplete_selection() {
+                let ctx = create_command_context(app);
+                let registry = app.command_registry.clone();
+                match registry.execute(&command_name, "", &ctx).await {
+                    Ok(output) => {
+                        handle_command_output(app, &command_name, output, event_tx.clone()).await?;
+                    }
+                    Err(e) => {
+                        app.add_message("system", &format!("Error: {}", e));
+                    }
+                }
+            }
+            Ok(true)
+        }
+        KeyCode::Esc => {
+            app.hide_autocomplete();
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Show slash command help
+async fn show_slash_command_help(app: &mut App) {
+    let commands = app.command_registry.list().await;
+    let mut help_text = String::from("Available slash commands:\n\n");
+    for cmd in commands {
+        help_text.push_str(&format!("  /{} - {}\n", cmd.name, cmd.description));
+    }
+    help_text.push_str("\nType /help for more information.");
+    app.add_message("system", &help_text);
+}
+
+/// Execute a slash command
+async fn execute_slash_command(
+    app: &mut App,
+    parsed: &ParsedCommand,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    let ctx = create_command_context(app);
+    let registry = app.command_registry.clone();
+    match registry.execute(&parsed.name, &parsed.args, &ctx).await {
+        Ok(output) => {
+            handle_command_output(app, &parsed.name, output, event_tx.clone()).await?;
+        }
+        Err(e) => {
+            app.add_message("system", &format!("Error: {}", e));
+        }
+    }
+    Ok(())
+}
+
+/// Start streaming response from LLM
+fn start_llm_stream(app: &mut App, input: &str, event_tx: &mpsc::Sender<AppEvent>) {
+    app.add_message("user", input);
+    app.is_processing = true;
+    app.status = "Processing".to_string();
+    app.add_message("assistant", "");
+
+    let tx = event_tx.clone();
+    let provider_id = app.provider_id.clone();
+    let model_id = app.model_id.clone();
+    let prompt = input.to_string();
+
+    tokio::spawn(async move {
+        if let Err(e) = stream_response_agentic(provider_id, model_id, prompt, tx.clone()).await {
+            let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
+        }
+    });
+}
+
+/// Handle submit action (Enter key)
+async fn handle_submit(app: &mut App, event_tx: &mpsc::Sender<AppEvent>) -> Result<()> {
+    if !app.is_ready() {
+        app.open_model_selector();
+        return Ok(());
+    }
+
+    if let Some(input) = app.take_input() {
+        if input.trim() == "/" {
+            show_slash_command_help(app).await;
+        } else if let Some(parsed) = ParsedCommand::parse(&input) {
+            execute_slash_command(app, &parsed, event_tx).await?;
+        } else {
+            start_llm_stream(app, &input, event_tx);
+        }
+    }
+    Ok(())
+}
+
+/// Handle keyboard input in the main loop
+async fn handle_key_input(
+    app: &mut App,
+    key: KeyEvent,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    // Handle autocomplete first
+    if handle_autocomplete_input(app, key, event_tx).await? {
+        return Ok(());
+    }
+
+    // Handle dialog input if dialog is open
+    if app.dialog.is_some() {
+        handle_dialog_input(app, key, event_tx.clone()).await?;
+        return Ok(());
+    }
+
+    // Check for keyboard shortcuts
+    if key.code == KeyCode::Char('m') && key.modifiers == KeyModifiers::CONTROL {
+        app.open_model_selector();
+        return Ok(());
+    }
+    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
+        app.open_provider_selector();
+        return Ok(());
+    }
+
+    let action = key_to_action(key);
+
+    if action == Action::Submit && !app.is_processing {
+        handle_submit(app, event_tx).await?;
+    } else if action == Action::Cancel && app.is_processing {
+        app.is_processing = false;
+        app.status = "Ready".to_string();
+    } else {
+        app.handle_action(action);
+        app.update_autocomplete().await;
+    }
+
+    Ok(())
+}
+
+/// Handle a single async event
+async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
+    match event {
+        AppEvent::StreamDelta(text) => {
+            app.append_to_assistant(&text);
+        }
+        AppEvent::StreamDone => {
+            app.is_processing = false;
+            app.status = "Ready".to_string();
+        }
+        AppEvent::StreamError(err) => {
+            app.is_processing = false;
+            app.status = "Error".to_string();
+            app.add_message("system", &format!("Error: {}", err));
+        }
+        AppEvent::ToolCall(name, id) => {
+            app.append_to_assistant(&format!("\n[Calling tool: {}]\n", name));
+            app.add_tool_call(&id, &name, "");
+        }
+        AppEvent::DeviceCodeReceived {
+            user_code,
+            verification_uri,
+            device_code,
+            interval: _,
+        } => {
+            app.show_device_code(&user_code, &verification_uri, &device_code);
+            let _ = open::that(&verification_uri);
+        }
+        AppEvent::OAuthSuccess { provider_id } => {
+            let config = Config::load().await?;
+            provider::registry().initialize(&config).await?;
+            app.all_providers = provider::registry().list().await;
+            app.available_providers = provider::registry().list_available().await;
+            app.close_dialog();
+            app.add_message(
+                "system",
+                &format!("Successfully connected to {}!", provider_id),
+            );
+            app.open_model_selector();
+        }
+        AppEvent::OAuthError(err) => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.message = Some(format!("Error: {}", err));
+            }
+        }
+        AppEvent::ToolResult {
+            id,
+            output,
+            is_error,
+        } => {
+            handle_tool_result(app, &id, &output, is_error);
+        }
+        AppEvent::PermissionRequested(request) => {
+            app.show_permission_request(request);
+        }
+        AppEvent::PermissionResponse { id, allow, always } => {
+            handle_permission_response(app, &id, allow, always);
+        }
+    }
+    Ok(())
+}
+
+/// Handle tool result event
+fn handle_tool_result(app: &mut App, id: &str, output: &str, is_error: bool) {
+    let status = if is_error { "ERROR" } else { "OK" };
+    let mut display_output = output.to_string();
+
+    // Try to parse as JSON and extract meaningful info
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+            display_output = title.to_string();
+        }
+    }
+
+    // Limit output length for display
+    if display_output.len() > 200 {
+        display_output = format!("{}...", &display_output[..200]);
+    }
+
+    app.append_to_assistant(&format!(
+        "\n[Tool {} result: {}] {}\n",
+        id, status, display_output
+    ));
+    app.add_tool_result(id, output, is_error);
+}
+
+/// Handle permission response event
+fn handle_permission_response(app: &mut App, id: &str, allow: bool, always: bool) {
+    if allow {
+        if always {
+            app.status = format!("Permission granted (always): {}", id);
+        } else {
+            app.status = format!("Permission granted (once): {}", id);
+        }
+    } else {
+        app.status = format!("Permission denied: {}", id);
+    }
+}
+
+/// Process all pending async events
+async fn handle_async_events(app: &mut App, event_rx: &mut mpsc::Receiver<AppEvent>) -> Result<()> {
+    while let Ok(event) = event_rx.try_recv() {
+        handle_single_event(app, event).await?;
+    }
+    Ok(())
+}
+
 /// Main event loop
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -95,296 +377,18 @@ async fn run_app(
     let mut last_tick = std::time::Instant::now();
 
     loop {
-        // Draw UI
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Handle events
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                // Handle autocomplete input if autocomplete is open
-                if app.autocomplete.is_some() {
-                    match key.code {
-                        KeyCode::Up => {
-                            if let Some(autocomplete) = &mut app.autocomplete {
-                                autocomplete.move_up();
-                            }
-                            continue;
-                        }
-                        KeyCode::Down => {
-                            if let Some(autocomplete) = &mut app.autocomplete {
-                                autocomplete.move_down();
-                            }
-                            continue;
-                        }
-                        KeyCode::Enter | KeyCode::Tab => {
-                            // Execute the selected command immediately
-                            if let Some(command_name) = app.insert_autocomplete_selection() {
-                                // Execute slash command
-                                let ctx = CommandContext {
-                                    session_id: app
-                                        .session
-                                        .as_ref()
-                                        .map(|s| s.id.clone())
-                                        .unwrap_or_default(),
-                                    cwd: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    root: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    extra: Default::default(),
-                                };
-
-                                let registry = app.command_registry.clone();
-                                match registry.execute(&command_name, "", &ctx).await {
-                                    Ok(output) => {
-                                        handle_command_output(
-                                            app,
-                                            &command_name,
-                                            output,
-                                            event_tx.clone(),
-                                        )
-                                        .await?;
-                                    }
-                                    Err(e) => {
-                                        app.add_message("system", &format!("Error: {}", e));
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        KeyCode::Esc => {
-                            app.hide_autocomplete();
-                            continue;
-                        }
-                        _ => {
-                            // Let the normal input handling process the key
-                            // but we'll update autocomplete after
-                        }
-                    }
-                }
-
-                // Handle dialog input if dialog is open
-                if app.dialog.is_some() {
-                    handle_dialog_input(app, key, event_tx.clone()).await?;
-                } else {
-                    let action = key_to_action(key);
-
-                    // Check for model selector keybind (Ctrl+M)
-                    if key.code == KeyCode::Char('m') && key.modifiers == KeyModifiers::CONTROL {
-                        app.open_model_selector();
-                        continue;
-                    }
-
-                    // Check for provider selector keybind (Ctrl+P)
-                    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
-                        app.open_provider_selector();
-                        continue;
-                    }
-
-                    if action == Action::Submit && !app.is_processing {
-                        // Check if model is configured
-                        if !app.is_ready() {
-                            app.open_model_selector();
-                            continue;
-                        }
-
-                        if let Some(input) = app.take_input() {
-                            // Check if input is just "/" - show help for slash commands
-                            if input.trim() == "/" {
-                                // Show available slash commands
-                                let commands = app.command_registry.list().await;
-                                let mut help_text = String::from("Available slash commands:\n\n");
-                                for cmd in commands {
-                                    help_text.push_str(&format!(
-                                        "  /{} - {}\n",
-                                        cmd.name, cmd.description
-                                    ));
-                                }
-                                help_text.push_str("\nType /help for more information.");
-                                app.add_message("system", &help_text);
-                                continue;
-                            }
-
-                            // Check if this is a slash command
-                            if let Some(parsed) = ParsedCommand::parse(&input) {
-                                // Execute slash command
-                                let ctx = CommandContext {
-                                    session_id: app
-                                        .session
-                                        .as_ref()
-                                        .map(|s| s.id.clone())
-                                        .unwrap_or_default(),
-                                    cwd: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    root: std::env::current_dir()
-                                        .ok()
-                                        .and_then(|p| p.to_str().map(String::from))
-                                        .unwrap_or_else(|| ".".to_string()),
-                                    extra: Default::default(),
-                                };
-
-                                let registry = app.command_registry.clone();
-                                match registry.execute(&parsed.name, &parsed.args, &ctx).await {
-                                    Ok(output) => {
-                                        handle_command_output(
-                                            app,
-                                            &parsed.name,
-                                            output,
-                                            event_tx.clone(),
-                                        )
-                                        .await?;
-                                    }
-                                    Err(e) => {
-                                        app.add_message("system", &format!("Error: {}", e));
-                                    }
-                                }
-                                continue;
-                            }
-
-                            // Normal user message (not a slash command)
-                            // Add user message
-                            app.add_message("user", &input);
-                            app.is_processing = true;
-                            app.status = "Processing".to_string();
-
-                            // Add empty assistant message
-                            app.add_message("assistant", "");
-
-                            // Start agentic loop
-                            let tx = event_tx.clone();
-                            let provider_id = app.provider_id.clone();
-                            let model_id = app.model_id.clone();
-                            let prompt = input.clone();
-
-                            tokio::spawn(async move {
-                                if let Err(e) = stream_response_agentic(
-                                    provider_id,
-                                    model_id,
-                                    prompt,
-                                    tx.clone(),
-                                )
-                                .await
-                                {
-                                    let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
-                                }
-                            });
-                        }
-                    } else if action == Action::Cancel && app.is_processing {
-                        // Cancel processing
-                        app.is_processing = false;
-                        app.status = "Ready".to_string();
-                    } else {
-                        app.handle_action(action);
-                        // Update autocomplete after input changes
-                        app.update_autocomplete().await;
-                    }
-                }
+                handle_key_input(app, key, &event_tx).await?;
             }
         }
 
-        // Process async events
-        while let Ok(event) = event_rx.try_recv() {
-            match event {
-                AppEvent::StreamDelta(text) => {
-                    app.append_to_assistant(&text);
-                }
-                AppEvent::StreamDone => {
-                    app.is_processing = false;
-                    app.status = "Ready".to_string();
-                }
-                AppEvent::StreamError(err) => {
-                    app.is_processing = false;
-                    app.status = "Error".to_string();
-                    app.add_message("system", &format!("Error: {}", err));
-                }
-                AppEvent::ToolCall(name, id) => {
-                    app.append_to_assistant(&format!("\n[Calling tool: {}]\n", name));
-                    app.add_tool_call(&id, &name, "");
-                }
-                AppEvent::DeviceCodeReceived {
-                    user_code,
-                    verification_uri,
-                    device_code,
-                    interval: _,
-                } => {
-                    app.show_device_code(&user_code, &verification_uri, &device_code);
-                    // Try to open browser
-                    let _ = open::that(&verification_uri);
-                }
-                AppEvent::OAuthSuccess { provider_id } => {
-                    // Re-initialize registry to pick up new credentials
-                    let config = Config::load().await?;
-                    provider::registry().initialize(&config).await?;
-                    app.all_providers = provider::registry().list().await;
-                    app.available_providers = provider::registry().list_available().await;
-                    app.close_dialog();
-                    app.add_message(
-                        "system",
-                        &format!("Successfully connected to {}!", provider_id),
-                    );
-                    app.open_model_selector();
-                }
-                AppEvent::OAuthError(err) => {
-                    if let Some(dialog) = &mut app.dialog {
-                        dialog.message = Some(format!("Error: {}", err));
-                    }
-                }
-                AppEvent::ToolResult {
-                    id,
-                    output,
-                    is_error,
-                } => {
-                    // Show tool result in messages
-                    let status = if is_error { "ERROR" } else { "OK" };
-                    let mut display_output = output.clone();
+        handle_async_events(app, event_rx).await?;
 
-                    // Try to parse as JSON and extract meaningful info
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
-                        if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
-                            display_output = title.to_string();
-                        }
-                    }
-
-                    // Limit output length for display
-                    if display_output.len() > 200 {
-                        display_output = format!("{}...", &display_output[..200]);
-                    }
-
-                    app.append_to_assistant(&format!(
-                        "\n[Tool {} result: {}] {}\n",
-                        id, status, display_output
-                    ));
-                    app.add_tool_result(&id, &output, is_error);
-                }
-                AppEvent::PermissionRequested(request) => {
-                    // Show permission dialog
-                    app.show_permission_request(request);
-                }
-                AppEvent::PermissionResponse { id, allow, always } => {
-                    // Handle permission response
-                    // TODO: Send response back to agentic loop
-                    // For now, just log it
-                    if allow {
-                        if always {
-                            app.status = format!("Permission granted (always): {}", id);
-                        } else {
-                            app.status = format!("Permission granted (once): {}", id);
-                        }
-                    } else {
-                        app.status = format!("Permission denied: {}", id);
-                    }
-                }
-            }
-        }
-
-        // Tick for animations
         if last_tick.elapsed() >= tick_rate {
             app.spinner_frame = app.spinner_frame.wrapping_add(1);
             last_tick = std::time::Instant::now();
