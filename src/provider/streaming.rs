@@ -696,3 +696,274 @@ fn parse_openai_sse(line: &str) -> Option<StreamEvent> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod parse_anthropic_sse {
+        use super::*;
+
+        #[test]
+        fn test_text_delta() {
+            let event = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(result, Some(StreamEvent::TextDelta(text)) if text == "Hello"));
+        }
+
+        #[test]
+        fn test_thinking_delta() {
+            let event = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think..."}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(
+                matches!(result, Some(StreamEvent::ReasoningDelta(text)) if text == "Let me think...")
+            );
+        }
+
+        #[test]
+        fn test_tool_use_start() {
+            let event = r#"event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool_123","name":"bash"}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::ToolCallStart { id, name })
+                    if id == "tool_123" && name == "bash"
+            ));
+        }
+
+        #[test]
+        fn test_input_json_delta() {
+            let event = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":"}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::ToolCallDelta { id, arguments_delta })
+                    if id == "tool_1" && arguments_delta == "{\"cmd\":"
+            ));
+        }
+
+        #[test]
+        fn test_message_stop() {
+            let event = r#"event: message_stop
+data: {}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Done { finish_reason }) if finish_reason == "stop"
+            ));
+        }
+
+        #[test]
+        fn test_message_delta_with_stop_reason() {
+            let event = r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Done { finish_reason }) if finish_reason == "end_turn"
+            ));
+        }
+
+        #[test]
+        fn test_usage() {
+            let event = r#"event: message_delta
+data: {"type":"message_delta","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens })
+                    if input_tokens == 100 && output_tokens == 50 && cache_read_tokens == 10 && cache_write_tokens == 5
+            ));
+        }
+
+        #[test]
+        fn test_error_event() {
+            let event = r#"event: error
+data: {"error":{"message":"Rate limit exceeded"}}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Error(msg)) if msg == "Rate limit exceeded"
+            ));
+        }
+
+        #[test]
+        fn test_unknown_event() {
+            let event = r#"event: ping
+data: {}"#;
+
+            let result = parse_anthropic_sse(event);
+            assert!(result.is_none());
+        }
+    }
+
+    mod parse_openai_sse {
+        use super::*;
+
+        #[test]
+        fn test_done() {
+            let line = "data: [DONE]";
+            let result = parse_openai_sse(line);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Done { finish_reason }) if finish_reason == "stop"
+            ));
+        }
+
+        #[test]
+        fn test_text_delta() {
+            let line = r#"data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
+            let result = parse_openai_sse(line);
+            assert!(matches!(result, Some(StreamEvent::TextDelta(text)) if text == "Hello"));
+        }
+
+        #[test]
+        fn test_finish_reason() {
+            let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+            let result = parse_openai_sse(line);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Done { finish_reason }) if finish_reason == "stop"
+            ));
+        }
+
+        #[test]
+        fn test_tool_call_start() {
+            let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"id":"call_abc123","index":0,"function":{"name":"bash"}}]},"index":0}]}"#;
+            let result = parse_openai_sse(line);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::ToolCallStart { id, name })
+                    if id == "call_abc123" && name == "bash"
+            ));
+        }
+
+        #[test]
+        fn test_tool_call_arguments() {
+            let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":"}}]},"index":0}]}"#;
+            let result = parse_openai_sse(line);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::ToolCallDelta { arguments_delta, .. })
+                    if arguments_delta == "{\"cmd\":"
+            ));
+        }
+
+        #[test]
+        fn test_usage() {
+            let line = r#"data: {"usage":{"prompt_tokens":100,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":10}}}"#;
+            let result = parse_openai_sse(line);
+            assert!(matches!(
+                result,
+                Some(StreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, .. })
+                    if input_tokens == 100 && output_tokens == 50 && cache_read_tokens == 10
+            ));
+        }
+
+        #[test]
+        fn test_invalid_json() {
+            let line = "data: not-json";
+            let result = parse_openai_sse(line);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_no_data_prefix() {
+            let line = "not a data line";
+            let result = parse_openai_sse(line);
+            assert!(result.is_none());
+        }
+    }
+
+    mod convert_messages_to_openai {
+        use super::*;
+
+        #[test]
+        fn test_simple_text_message() {
+            let messages = vec![ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text("Hello".to_string()),
+            }];
+
+            let result = convert_messages_to_openai(messages);
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0]["role"], "user");
+            assert_eq!(result[0]["content"], "Hello");
+        }
+
+        #[test]
+        fn test_message_with_tool_calls() {
+            let messages = vec![ChatMessage {
+                role: "assistant".to_string(),
+                content: ChatContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Let me help.".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "call_123".to_string(),
+                        name: "bash".to_string(),
+                        input: serde_json::json!({"cmd": "ls"}),
+                    },
+                ]),
+            }];
+
+            let result = convert_messages_to_openai(messages);
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0]["role"], "assistant");
+            assert_eq!(result[0]["content"], "Let me help.");
+            assert!(result[0]["tool_calls"].is_array());
+        }
+
+        #[test]
+        fn test_message_with_tool_results() {
+            let messages = vec![ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Parts(vec![ContentPart::ToolResult {
+                    tool_use_id: "call_123".to_string(),
+                    content: "file.txt".to_string(),
+                    is_error: None,
+                }]),
+            }];
+
+            let result = convert_messages_to_openai(messages);
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0]["role"], "tool");
+            assert_eq!(result[0]["tool_call_id"], "call_123");
+            assert_eq!(result[0]["content"], "file.txt");
+        }
+
+        #[test]
+        fn test_message_with_image() {
+            let messages = vec![ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "What is this?".to_string(),
+                    },
+                    ContentPart::ImageUrl {
+                        image_url: ImageUrl {
+                            url: "data:image/png;base64,abc".to_string(),
+                            detail: Some("auto".to_string()),
+                        },
+                    },
+                ]),
+            }];
+
+            let result = convert_messages_to_openai(messages);
+            assert_eq!(result.len(), 1);
+            assert!(result[0]["content"].is_array());
+        }
+    }
+}
