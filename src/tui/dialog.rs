@@ -86,6 +86,11 @@ impl App {
         self.dialog = Some(dialog);
     }
 
+    /// Open provider connection dialog (alias for open_provider_selector)
+    pub fn open_provider_connection(&mut self) {
+        self.open_provider_selector();
+    }
+
     /// Open API key input dialog for a provider
     pub fn open_api_key_input(&mut self, provider_id: &str) {
         let provider = self.all_providers.iter().find(|p| p.id == provider_id);

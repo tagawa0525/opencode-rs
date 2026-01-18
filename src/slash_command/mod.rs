@@ -30,6 +30,42 @@ pub enum CommandAction {
     OpenSessionList,
     /// Create new session
     NewSession,
+    /// Exit the application
+    Exit,
+    /// Open provider connection dialog
+    OpenProviderConnection,
+    /// Undo last message
+    Undo,
+    /// Redo last message
+    Redo,
+    /// Compact/summarize session
+    Compact,
+    /// Unshare session
+    Unshare,
+    /// Rename session (opens rename dialog)
+    Rename,
+    /// Copy session transcript to clipboard
+    Copy,
+    /// Export session transcript to file
+    Export,
+    /// Jump to message (timeline)
+    Timeline,
+    /// Fork from message
+    Fork,
+    /// Toggle thinking visibility
+    ToggleThinking,
+    /// Share session
+    Share,
+    /// Show status
+    Status,
+    /// Toggle MCPs
+    ToggleMcp,
+    /// Toggle theme
+    ToggleTheme,
+    /// Open editor
+    OpenEditor,
+    /// Show all commands
+    ShowCommands,
 }
 
 /// Output from a slash command

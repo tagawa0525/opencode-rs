@@ -12,7 +12,7 @@ async fn test_load_commands_from_opencode_directory() {
     println!("Loaded {} commands from .opencode/command/", commands.len());
 
     // We should have at least the test command we created
-    assert!(commands.len() > 0, "Should load at least one command");
+    assert!(!commands.is_empty(), "Should load at least one command");
 
     // Print all loaded commands
     for cmd in &commands {

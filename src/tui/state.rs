@@ -63,6 +63,12 @@ pub struct App {
     pub command_registry: Arc<CommandRegistry>,
     /// Autocomplete state
     pub autocomplete: Option<AutocompleteState>,
+    /// Show thinking/reasoning in messages
+    pub show_thinking: bool,
+    /// Show tool details in messages
+    pub show_tool_details: bool,
+    /// Show assistant metadata (model, agent, etc)
+    pub show_assistant_metadata: bool,
 }
 
 impl Default for App {
@@ -90,6 +96,9 @@ impl Default for App {
             all_providers: Vec::new(),
             command_registry: Arc::new(CommandRegistry::new()),
             autocomplete: None,
+            show_thinking: true,
+            show_tool_details: true,
+            show_assistant_metadata: true,
         }
     }
 }
@@ -360,6 +369,57 @@ impl App {
         self.command_registry.register(Arc::new(ClearCommand)).await;
         self.command_registry.register(Arc::new(ModelCommand)).await;
         self.command_registry.register(Arc::new(AgentCommand)).await;
+        self.command_registry.register(Arc::new(ExitCommand)).await;
+        self.command_registry
+            .register(Arc::new(ConnectCommand))
+            .await;
+
+        // Session management commands
+        self.command_registry.register(Arc::new(UndoCommand)).await;
+        self.command_registry.register(Arc::new(RedoCommand)).await;
+        self.command_registry
+            .register(Arc::new(CompactCommand))
+            .await;
+        self.command_registry
+            .register(Arc::new(UnshareCommand))
+            .await;
+        self.command_registry
+            .register(Arc::new(RenameCommand))
+            .await;
+        self.command_registry.register(Arc::new(CopyCommand)).await;
+        self.command_registry
+            .register(Arc::new(ExportCommand))
+            .await;
+        self.command_registry
+            .register(Arc::new(TimelineCommand))
+            .await;
+        self.command_registry.register(Arc::new(ForkCommand)).await;
+        self.command_registry
+            .register(Arc::new(ThinkingCommand))
+            .await;
+        self.command_registry.register(Arc::new(ShareCommand)).await;
+        self.command_registry
+            .register(Arc::new(SessionCommand))
+            .await;
+
+        // UI and system commands
+        self.command_registry
+            .register(Arc::new(StatusCommand))
+            .await;
+        self.command_registry.register(Arc::new(McpCommand)).await;
+        self.command_registry.register(Arc::new(ThemeCommand)).await;
+        self.command_registry
+            .register(Arc::new(EditorCommand))
+            .await;
+        self.command_registry
+            .register(Arc::new(CommandsCommand::new()))
+            .await;
+
+        // Project commands
+        self.command_registry.register(Arc::new(InitCommand)).await;
+        self.command_registry
+            .register(Arc::new(ReviewCommand))
+            .await;
 
         // Register custom commands from config
         if let Some(commands) = &config.command {
@@ -408,25 +468,31 @@ mod tests {
 
         #[test]
         fn test_is_ready_configured() {
-            let mut app = App::default();
-            app.model_configured = true;
-            app.provider_id = "anthropic".to_string();
-            app.model_id = "claude-3-5-sonnet".to_string();
+            let app = App {
+                model_configured: true,
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
+                ..Default::default()
+            };
             assert!(app.is_ready());
         }
 
         #[test]
         fn test_close_dialog() {
-            let mut app = App::default();
-            app.dialog = Some(DialogState::new(DialogType::ModelSelector, "Test"));
+            let mut app = App {
+                dialog: Some(DialogState::new(DialogType::ModelSelector, "Test")),
+                ..Default::default()
+            };
             app.close_dialog();
             assert!(app.dialog.is_none());
         }
 
         #[test]
         fn test_hide_autocomplete() {
-            let mut app = App::default();
-            app.autocomplete = Some(AutocompleteState::new(vec![]));
+            let mut app = App {
+                autocomplete: Some(AutocompleteState::new(vec![])),
+                ..Default::default()
+            };
             app.hide_autocomplete();
             assert!(app.autocomplete.is_none());
         }
@@ -445,9 +511,11 @@ mod tests {
 
         #[test]
         fn test_handle_action_backspace() {
-            let mut app = App::default();
-            app.input = "ab".to_string();
-            app.cursor_position = 2;
+            let mut app = App {
+                input: "ab".to_string(),
+                cursor_position: 2,
+                ..Default::default()
+            };
             app.handle_action(Action::Backspace);
             assert_eq!(app.input, "a");
             assert_eq!(app.cursor_position, 1);
@@ -455,9 +523,11 @@ mod tests {
 
         #[test]
         fn test_handle_action_left_right() {
-            let mut app = App::default();
-            app.input = "ab".to_string();
-            app.cursor_position = 2;
+            let mut app = App {
+                input: "ab".to_string(),
+                cursor_position: 2,
+                ..Default::default()
+            };
             app.handle_action(Action::Left);
             assert_eq!(app.cursor_position, 1);
             app.handle_action(Action::Right);
@@ -466,9 +536,11 @@ mod tests {
 
         #[test]
         fn test_handle_action_home_end() {
-            let mut app = App::default();
-            app.input = "abc".to_string();
-            app.cursor_position = 1;
+            let mut app = App {
+                input: "abc".to_string(),
+                cursor_position: 1,
+                ..Default::default()
+            };
             app.handle_action(Action::Home);
             assert_eq!(app.cursor_position, 0);
             app.handle_action(Action::End);
@@ -488,9 +560,11 @@ mod tests {
 
         #[test]
         fn test_take_input() {
-            let mut app = App::default();
-            app.input = "hello".to_string();
-            app.cursor_position = 5;
+            let mut app = App {
+                input: "hello".to_string(),
+                cursor_position: 5,
+                ..Default::default()
+            };
             let input = app.take_input();
             assert_eq!(input, Some("hello".to_string()));
             assert!(app.input.is_empty());
@@ -499,8 +573,10 @@ mod tests {
 
         #[test]
         fn test_take_input_empty() {
-            let mut app = App::default();
-            app.input = "   ".to_string();
+            let mut app = App {
+                input: "   ".to_string(),
+                ..Default::default()
+            };
             let input = app.take_input();
             assert!(input.is_none());
         }
@@ -535,9 +611,11 @@ mod tests {
 
         #[test]
         fn test_unicode_backspace() {
-            let mut app = App::default();
-            app.input = "日本".to_string();
-            app.cursor_position = 6;
+            let mut app = App {
+                input: "日本".to_string(),
+                cursor_position: 6,
+                ..Default::default()
+            };
             app.handle_action(Action::Backspace);
             assert_eq!(app.input, "日");
             assert_eq!(app.cursor_position, 3);
@@ -545,9 +623,11 @@ mod tests {
 
         #[test]
         fn test_unicode_cursor_movement() {
-            let mut app = App::default();
-            app.input = "日本語".to_string();
-            app.cursor_position = 9;
+            let mut app = App {
+                input: "日本語".to_string(),
+                cursor_position: 9,
+                ..Default::default()
+            };
             app.handle_action(Action::Left);
             assert_eq!(app.cursor_position, 6);
             app.handle_action(Action::Right);
