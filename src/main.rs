@@ -137,6 +137,11 @@ async fn main() -> Result<()> {
         std::env::set_current_dir(dir)?;
     }
 
+    // Initialize permission state (load saved rules)
+    if let Err(e) = permission_state::initialize().await {
+        tracing::warn!("Failed to initialize permission state: {}", e);
+    }
+
     match cli.command {
         Some(Commands::Run { prompt, model }) => {
             cli::run::execute(prompt, model).await?;

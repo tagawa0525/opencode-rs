@@ -163,8 +163,10 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
             )
             .await;
 
-            // 3. Ask user in blocking thread
+            // 3. Ask user in blocking thread and send result back to async context
             let request_for_blocking = request_clone.clone();
+            let (user_response_tx, user_response_rx) = tokio::sync::oneshot::channel();
+            
             tokio::task::spawn_blocking(move || {
                 use std::io::{self, Write};
 
@@ -204,15 +206,15 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
                     (false, tool::PermissionScope::Once)
                 };
 
-                // Send response via global state handler
-                tokio::runtime::Handle::current().block_on(async {
-                    crate::permission_state::send_permission_response(
-                        request_for_blocking.id,
-                        allow,
-                        scope,
-                    )
-                    .await;
-                });
+                // Send user response back to async context via channel
+                let _ = user_response_tx.send((request_for_blocking.id, allow, scope));
+            });
+            
+            // 4. Wait for user response and then send permission response
+            tokio::spawn(async move {
+                if let Ok((id, allow, scope)) = user_response_rx.await {
+                    crate::permission_state::send_permission_response(id, allow, scope).await;
+                }
             });
         });
 
