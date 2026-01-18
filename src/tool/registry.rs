@@ -48,6 +48,22 @@ impl ToolRegistry {
             "grep".to_string(),
             Arc::new(GrepTool::new()) as Arc<dyn Tool>,
         );
+        tools.insert(
+            "question".to_string(),
+            Arc::new(QuestionTool) as Arc<dyn Tool>,
+        );
+        tools.insert(
+            "todowrite".to_string(),
+            Arc::new(TodoWriteTool) as Arc<dyn Tool>,
+        );
+        tools.insert(
+            "todoread".to_string(),
+            Arc::new(TodoReadTool) as Arc<dyn Tool>,
+        );
+        tools.insert(
+            "webfetch".to_string(),
+            Arc::new(WebFetchTool) as Arc<dyn Tool>,
+        );
 
         Self {
             tools: RwLock::new(tools),

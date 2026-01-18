@@ -9,8 +9,12 @@ mod edit;
 mod executor;
 mod glob;
 mod grep;
+mod invalid;
+mod question;
 mod read;
 mod registry;
+mod todo;
+mod webfetch;
 mod write;
 
 pub use bash::BashTool;
@@ -18,8 +22,12 @@ pub use edit::EditTool;
 pub use executor::*;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
+pub use invalid::InvalidTool;
+pub use question::QuestionTool;
 pub use read::ReadTool;
 pub use registry::*;
+pub use todo::{TodoReadTool, TodoWriteTool};
+pub use webfetch::WebFetchTool;
 pub use write::WriteTool;
 
 use anyhow::Result;

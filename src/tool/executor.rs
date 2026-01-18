@@ -11,6 +11,9 @@ use std::collections::{HashMap, VecDeque};
 /// Doom loop detection threshold - number of identical consecutive tool calls
 pub const DOOM_LOOP_THRESHOLD: usize = 3;
 
+/// Maximum number of tools that can be executed in parallel (matches TypeScript implementation)
+pub const MAX_PARALLEL_TOOLS: usize = 10;
+
 /// Represents a pending tool call that needs to be executed
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingToolCall {
@@ -98,10 +101,36 @@ pub async fn execute_all_tools_parallel(
 ) -> Vec<ContentPart> {
     use futures::future::join_all;
 
-    // Create futures for all tool executions
-    let futures: Vec<_> = pending_calls
+    // Limit parallel execution to MAX_PARALLEL_TOOLS (matches TypeScript implementation)
+    let (allowed_calls, discarded_calls): (Vec<_>, Vec<_>) = pending_calls
         .into_iter()
-        .map(|call| {
+        .enumerate()
+        .partition(|(i, _)| *i < MAX_PARALLEL_TOOLS);
+
+    let mut results = Vec::new();
+
+    // Add error results for discarded calls
+    for (_, call) in discarded_calls {
+        let error_json = serde_json::json!({
+            "title": "Tool Execution Error",
+            "error": format!(
+                "Maximum parallel tool limit exceeded. Only {} tools can be executed in parallel. This tool call was discarded.",
+                MAX_PARALLEL_TOOLS
+            ),
+        });
+
+        results.push(ContentPart::ToolResult {
+            tool_use_id: call.id,
+            content: serde_json::to_string(&error_json)
+                .unwrap_or_else(|_| "Maximum parallel tool limit exceeded".to_string()),
+            is_error: Some(true),
+        });
+    }
+
+    // Create futures for allowed tool executions
+    let futures: Vec<_> = allowed_calls
+        .into_iter()
+        .map(|(_, call)| {
             let ctx = ctx.clone();
             async move {
                 // Execute the tool
@@ -144,8 +173,13 @@ pub async fn execute_all_tools_parallel(
         })
         .collect();
 
-    // Execute all tools in parallel
-    join_all(futures).await
+    // Execute allowed tools in parallel
+    let mut parallel_results = join_all(futures).await;
+
+    // Combine discarded errors with parallel results
+    results.append(&mut parallel_results);
+
+    results
 }
 
 /// Build a tool result message to send back to the LLM
