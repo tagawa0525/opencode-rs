@@ -88,6 +88,29 @@ pub struct ToolDefinition {
     pub input_schema: serde_json::Value,
 }
 
+/// Convert messages to OpenAI format with optional system prompt
+/// OpenAI expects:
+/// - System message as the first message with role="system"
+/// - Tool calls as tool_calls array in assistant messages
+/// - Tool results as separate messages with role="tool"
+pub fn convert_messages_to_openai_with_system(
+    messages: Vec<ChatMessage>,
+    system: Option<String>,
+) -> Vec<serde_json::Value> {
+    let mut result = Vec::new();
+
+    // Add system message first if provided
+    if let Some(system_prompt) = system {
+        result.push(serde_json::json!({
+            "role": "system",
+            "content": system_prompt,
+        }));
+    }
+
+    result.extend(convert_messages_to_openai(messages));
+    result
+}
+
 /// Convert messages to OpenAI format
 /// OpenAI expects:
 /// - Tool calls as tool_calls array in assistant messages

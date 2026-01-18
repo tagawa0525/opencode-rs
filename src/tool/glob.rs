@@ -53,11 +53,21 @@ impl Tool for GlobTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("pattern is required"))?;
 
-        let search_path = args
+        // Resolve search path: if not absolute, join with cwd (like TypeScript version)
+        let search_path_arg = args
             .get("path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| ctx.cwd.clone());
+
+        let search_path = if Path::new(&search_path_arg).is_absolute() {
+            search_path_arg
+        } else {
+            Path::new(&ctx.cwd)
+                .join(&search_path_arg)
+                .to_string_lossy()
+                .to_string()
+        };
 
         // Build the glob pattern
         let glob_pattern = if Path::new(pattern).is_absolute() {

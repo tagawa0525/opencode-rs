@@ -20,6 +20,7 @@ struct PromptContext {
     tool_ctx: ToolContext,
     permission_checker: PermissionChecker,
     format: String,
+    system_prompt: String,
 }
 
 /// Result of processing a stream
@@ -118,7 +119,10 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
         .with_cwd(cwd.clone())
-        .with_root(cwd);
+        .with_root(cwd.clone());
+
+    // Generate system prompt
+    let system_prompt = crate::session::system::generate(&cwd, &provider_id, &model_id);
 
     // Get tool definitions
     let tools = tool::registry().definitions().await;
@@ -143,6 +147,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
             tool_ctx,
             permission_checker,
             format: format.to_string(),
+            system_prompt,
         },
         session,
     ))
@@ -197,7 +202,7 @@ async fn create_provider_stream(
                     &ctx.api_key,
                     &ctx.model_api_id,
                     messages.to_vec(),
-                    None,
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.max_tokens,
                 )
@@ -214,6 +219,7 @@ async fn create_provider_stream(
                     base_url,
                     &ctx.model_api_id,
                     messages.to_vec(),
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.max_tokens,
                 )
@@ -225,6 +231,7 @@ async fn create_provider_stream(
                     &ctx.api_key,
                     &ctx.model_api_id,
                     messages.to_vec(),
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.max_tokens,
                 )

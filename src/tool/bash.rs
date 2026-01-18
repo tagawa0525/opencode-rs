@@ -124,11 +124,21 @@ fn parse_args(args: Value, ctx: &ToolContext) -> Result<BashArgs> {
         .ok_or_else(|| anyhow::anyhow!("command is required"))?
         .to_string();
 
-    let workdir = args
+    // Resolve workdir: if not absolute, join with cwd (like TypeScript version)
+    let workdir_arg = args
         .get("workdir")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| ctx.cwd.clone());
+
+    let workdir = if std::path::Path::new(&workdir_arg).is_absolute() {
+        workdir_arg
+    } else {
+        std::path::Path::new(&ctx.cwd)
+            .join(&workdir_arg)
+            .to_string_lossy()
+            .to_string()
+    };
 
     let timeout_ms = args
         .get("timeout")

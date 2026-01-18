@@ -28,14 +28,14 @@ impl Tool for WriteTool {
 - This tool will overwrite the existing file if there is one at the provided path
 - ALWAYS prefer editing existing files in the codebase using the Edit tool
 - NEVER proactively create documentation files unless explicitly requested
-- The filePath must be an absolute path"#
+- The filePath can be absolute or relative to the working directory"#
                 .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "filePath": {
                         "type": "string",
-                        "description": "The absolute path to the file to write"
+                        "description": "The path to the file to write (absolute or relative to working directory)"
                     },
                     "content": {
                         "type": "string",
@@ -47,8 +47,8 @@ impl Tool for WriteTool {
         }
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        let file_path = args
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let file_path_arg = args
             .get("filePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("filePath is required"))?;
@@ -58,8 +58,16 @@ impl Tool for WriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("content is required"))?;
 
-        // Validate path (allow paths outside root for absolute paths)
-        let path = Path::new(file_path);
+        // Resolve path: if not absolute, join with cwd (like TypeScript version)
+        let file_path = Path::new(file_path_arg);
+        let resolved_path = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            Path::new(&ctx.cwd).join(file_path)
+        };
+
+        // Validate path is within project root
+        let path = validate_path(resolved_path.to_string_lossy().as_ref(), &ctx.root)?;
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
@@ -80,10 +88,11 @@ impl Tool for WriteTool {
         let lines = content.lines().count();
         let bytes = content.len();
 
+        let display_path = path.display().to_string();
         let title = if existed {
-            format!("Updated {} ({} lines)", file_path, lines)
+            format!("Updated {} ({} lines)", display_path, lines)
         } else {
-            format!("Created {} ({} lines)", file_path, lines)
+            format!("Created {} ({} lines)", display_path, lines)
         };
 
         Ok(ToolResult {
@@ -91,7 +100,7 @@ impl Tool for WriteTool {
             output: format!(
                 "Successfully {} file: {}\nBytes written: {}{}",
                 if existed { "updated" } else { "created" },
-                file_path,
+                display_path,
                 bytes,
                 if existed {
                     format!(" (was {} bytes)", old_size)
@@ -101,7 +110,7 @@ impl Tool for WriteTool {
             ),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("path".to_string(), json!(file_path));
+                m.insert("path".to_string(), json!(display_path));
                 m.insert("created".to_string(), json!(!existed));
                 m.insert("lines".to_string(), json!(lines));
                 m.insert("bytes".to_string(), json!(bytes));

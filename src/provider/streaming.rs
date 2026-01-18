@@ -12,6 +12,19 @@ use tokio::sync::mpsc;
 pub use super::parsers::{AnthropicParser, OpenAIParser};
 pub use super::stream_types::*;
 
+/// Parameters for OpenAI-compatible API streaming
+pub struct OpenAIStreamParams {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    pub system: Option<String>,
+    pub tools: Vec<ToolDefinition>,
+    pub max_tokens: u64,
+    pub request_modifier:
+        Option<Box<dyn FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder + Send>>,
+}
+
 /// Parser trait for SSE streams
 trait SseParser: Send + 'static {
     fn parse(&mut self, chunk: &str) -> Option<StreamEvent>;
@@ -152,17 +165,28 @@ impl StreamingClient {
     }
 
     /// Stream from OpenAI-compatible API
+    #[allow(clippy::too_many_arguments)]
     pub async fn stream_openai(
         &self,
         api_key: &str,
         base_url: &str,
         model: &str,
         messages: Vec<ChatMessage>,
+        system: Option<String>,
         tools: Vec<ToolDefinition>,
         max_tokens: u64,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
-        self.stream_openai_compatible(api_key, base_url, model, messages, tools, max_tokens, None)
-            .await
+        let params = OpenAIStreamParams {
+            api_key: api_key.to_string(),
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            messages,
+            system,
+            tools,
+            max_tokens,
+            request_modifier: None,
+        };
+        self.stream_openai_impl(params).await
     }
 
     /// Stream from GitHub Copilot API (OpenAI-compatible)
@@ -171,41 +195,36 @@ impl StreamingClient {
         token: &str,
         model: &str,
         messages: Vec<ChatMessage>,
+        system: Option<String>,
         tools: Vec<ToolDefinition>,
         max_tokens: u64,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
-        self.stream_openai_compatible(
-            token,
-            "https://api.githubcopilot.com",
-            model,
+        let params = OpenAIStreamParams {
+            api_key: token.to_string(),
+            base_url: "https://api.githubcopilot.com".to_string(),
+            model: model.to_string(),
             messages,
+            system,
             tools,
             max_tokens,
-            Some(Box::new(|builder| {
+            request_modifier: Some(Box::new(|builder| {
                 builder
                     .header("editor-version", "opencode/0.1.0")
                     .header("copilot-integration-id", "vscode-chat")
             })),
-        )
-        .await
+        };
+        self.stream_openai_impl(params).await
     }
 
-    /// Generic OpenAI-compatible streaming
-    async fn stream_openai_compatible(
+    /// Generic OpenAI-compatible streaming implementation
+    async fn stream_openai_impl(
         &self,
-        api_key: &str,
-        base_url: &str,
-        model: &str,
-        messages: Vec<ChatMessage>,
-        tools: Vec<ToolDefinition>,
-        max_tokens: u64,
-        request_modifier: Option<
-            Box<dyn FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder + Send>,
-        >,
+        params: OpenAIStreamParams,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
         let (tx, rx) = mpsc::channel(100);
 
-        let openai_tools: Vec<_> = tools
+        let openai_tools: Vec<_> = params
+            .tools
             .iter()
             .map(|t| {
                 serde_json::json!({
@@ -219,25 +238,28 @@ impl StreamingClient {
             })
             .collect();
 
-        let openai_messages = convert_messages_to_openai(messages);
+        let openai_messages =
+            convert_messages_to_openai_with_system(params.messages, params.system.clone());
 
         let mut request_body = serde_json::json!({
-            "model": model,
-            "max_tokens": max_tokens,
+            "model": params.model,
+            "max_tokens": params.max_tokens,
             "messages": openai_messages,
             "tools": openai_tools,
             "stream": true,
         });
 
         // Add stream_options for OpenAI (not Copilot)
-        if !base_url.contains("githubcopilot.com") {
+        if !params.base_url.contains("githubcopilot.com") {
             request_body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
         let client = self.client.clone();
-        let api_key = api_key.to_string();
+        let api_key = params.api_key;
+        let base_url = params.base_url;
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         let is_copilot = base_url.contains("githubcopilot.com");
+        let request_modifier = params.request_modifier;
 
         tokio::spawn(async move {
             let mut builder = client

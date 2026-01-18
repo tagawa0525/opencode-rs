@@ -25,6 +25,7 @@ struct StreamContext {
     tool_ctx: Arc<ToolContext>,
     permission_checker: PermissionChecker,
     event_tx: mpsc::Sender<AppEvent>,
+    system_prompt: String,
 }
 
 /// Result of processing a stream
@@ -133,9 +134,12 @@ async fn initialize_stream_context(
         agent: "tui".to_string(),
         abort: None,
         cwd: cwd.clone(),
-        root: cwd,
+        root: cwd.clone(),
         extra: Default::default(),
     });
+
+    // Generate system prompt
+    let system_prompt = crate::session::system::generate(&cwd, provider_id, model_id);
 
     Ok(StreamContext {
         provider_id: provider_id.to_string(),
@@ -145,6 +149,7 @@ async fn initialize_stream_context(
         tool_ctx,
         permission_checker,
         event_tx,
+        system_prompt,
     })
 }
 
@@ -161,7 +166,7 @@ async fn create_provider_stream(
                     &ctx.api_key,
                     &ctx.model.api.id,
                     messages.to_vec(),
-                    None,
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.model.limit.output,
                 )
@@ -180,6 +185,7 @@ async fn create_provider_stream(
                     base_url,
                     &ctx.model.api.id,
                     messages.to_vec(),
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.model.limit.output,
                 )
@@ -191,6 +197,7 @@ async fn create_provider_stream(
                     &ctx.api_key,
                     &ctx.model.api.id,
                     messages.to_vec(),
+                    Some(ctx.system_prompt.clone()),
                     ctx.tool_defs.clone(),
                     ctx.model.limit.output,
                 )
@@ -503,6 +510,13 @@ pub async fn stream_response(
         })
         .collect();
 
+    // Generate system prompt
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| ".".to_string());
+    let system_prompt = crate::session::system::generate(&cwd, provider_id, model_id);
+
     let client = StreamingClient::new();
 
     match provider_id {
@@ -512,7 +526,7 @@ pub async fn stream_response(
                     &api_key,
                     &model.api.id,
                     messages,
-                    None,
+                    Some(system_prompt),
                     tool_defs,
                     model.limit.output,
                 )
@@ -530,6 +544,7 @@ pub async fn stream_response(
                     base_url,
                     &model.api.id,
                     messages,
+                    Some(system_prompt),
                     tool_defs,
                     model.limit.output,
                 )
@@ -541,6 +556,7 @@ pub async fn stream_response(
                     &api_key,
                     &model.api.id,
                     messages,
+                    Some(system_prompt),
                     tool_defs,
                     model.limit.output,
                 )
