@@ -70,6 +70,150 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
         CommandAction::NewSession => {
             create_new_session(app).await;
         }
+        CommandAction::Exit => {
+            app.should_quit = true;
+        }
+        CommandAction::OpenProviderConnection => {
+            app.open_provider_connection();
+        }
+        CommandAction::Undo => {
+            // TODO: Implement message history and revert
+            app.add_message(
+                "system",
+                "Undo not yet fully implemented - message history needed",
+            );
+        }
+        CommandAction::Redo => {
+            // TODO: Implement message history and unrevert
+            app.add_message(
+                "system",
+                "Redo not yet fully implemented - message history needed",
+            );
+        }
+        CommandAction::Compact => {
+            // Compact is handled as an LLM prompt in the command itself
+            app.add_message("system", "Session compaction not yet implemented");
+        }
+        CommandAction::Unshare => {
+            app.add_message("system", "Session sharing not yet implemented");
+        }
+        CommandAction::Rename => {
+            // TODO: Open a rename dialog
+            app.add_message("system", "Session rename dialog not yet implemented");
+        }
+        CommandAction::Copy => {
+            use crate::tui::{format_transcript, TranscriptOptions};
+
+            let options = TranscriptOptions {
+                include_thinking: app.show_thinking,
+                include_tool_details: app.show_tool_details,
+                include_metadata: app.show_assistant_metadata,
+            };
+
+            let transcript = format_transcript(
+                &app.session_title,
+                &app.session_slug,
+                &app.messages,
+                &options,
+            );
+
+            match crate::tui::copy_to_clipboard(&transcript) {
+                Ok(_) => {
+                    app.add_message("system", "Transcript copied to clipboard");
+                }
+                Err(e) => {
+                    app.add_message("system", &format!("Failed to copy to clipboard: {}", e));
+                }
+            }
+        }
+        CommandAction::Export => {
+            use crate::tui::{format_transcript, TranscriptOptions};
+            use std::fs;
+
+            let options = TranscriptOptions {
+                include_thinking: app.show_thinking,
+                include_tool_details: app.show_tool_details,
+                include_metadata: app.show_assistant_metadata,
+            };
+
+            let transcript = format_transcript(
+                &app.session_title,
+                &app.session_slug,
+                &app.messages,
+                &options,
+            );
+
+            // Generate filename from session slug
+            let filename = if app.session_slug.is_empty() {
+                "session-transcript.md".to_string()
+            } else {
+                format!(
+                    "session-{}.md",
+                    &app.session_slug[..app.session_slug.len().min(8)]
+                )
+            };
+
+            match fs::write(&filename, transcript) {
+                Ok(_) => {
+                    app.add_message("system", &format!("Transcript exported to {}", filename));
+                }
+                Err(e) => {
+                    app.add_message("system", &format!("Failed to export transcript: {}", e));
+                }
+            }
+        }
+        CommandAction::Timeline => {
+            // TODO: Open timeline dialog showing all user messages
+            app.add_message("system", "Timeline dialog not yet implemented");
+        }
+        CommandAction::Fork => {
+            // TODO: Open fork dialog and create new session
+            app.add_message("system", "Session forking not yet implemented");
+        }
+        CommandAction::ToggleThinking => {
+            app.show_thinking = !app.show_thinking;
+            let msg = if app.show_thinking {
+                "Thinking visibility enabled"
+            } else {
+                "Thinking visibility disabled"
+            };
+            app.add_message("system", msg);
+        }
+        CommandAction::Share => {
+            // TODO: Generate share URL and copy to clipboard
+            app.add_message("system", "Session sharing not yet implemented");
+        }
+        CommandAction::Status => {
+            let status_msg = format!(
+                "Session: {}\nModel: {}\nProvider: {}\nTokens: {}\nCost: ${:.4}",
+                app.session_title,
+                app.model_display,
+                app.provider_id,
+                app.total_tokens,
+                app.total_cost
+            );
+            app.add_message("system", &status_msg);
+        }
+        CommandAction::ToggleMcp => {
+            // TODO: Open MCP dialog to enable/disable MCP servers
+            app.add_message("system", "MCP toggle dialog not yet implemented");
+        }
+        CommandAction::ToggleTheme => {
+            app.theme = if app.theme.name == "dark" {
+                crate::tui::theme::Theme::light()
+            } else {
+                crate::tui::theme::Theme::dark()
+            };
+            app.add_message("system", &format!("Theme switched to {}", app.theme.name));
+        }
+        CommandAction::OpenEditor => {
+            // TODO: Open external editor with current prompt
+            app.add_message("system", "External editor not yet implemented");
+        }
+        CommandAction::ShowCommands => {
+            // Show help instead
+            app.add_message("system", "Use /help to see all available commands");
+        }
     }
     Ok(())
 }

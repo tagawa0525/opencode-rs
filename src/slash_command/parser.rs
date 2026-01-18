@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
 use regex::Regex;
+use std::path::Path;
+use tokio::process::Command;
 
 /// Parsed slash command with name and arguments
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +130,60 @@ pub fn expand_template(template: &str, args: &[String]) -> String {
     result
 }
 
+/// Expand template with shell command execution and file references
+/// This is async version that supports:
+/// - !`command` - Execute shell command and substitute output
+/// - @filepath - Mark file for inclusion (caller should handle)
+pub async fn expand_template_async(template: &str, args: &[String]) -> Result<String> {
+    // First expand basic placeholders
+    let mut result = expand_template(template, args);
+
+    // Execute shell commands: !`command`
+    let shell_re = Regex::new(r"!\`([^`]+)\`").unwrap();
+
+    // Collect all shell commands first
+    let shell_commands: Vec<_> = shell_re
+        .captures_iter(&result.clone())
+        .map(|cap| cap.get(1).unwrap().as_str().to_string())
+        .collect();
+
+    // Execute commands and replace
+    for cmd_str in shell_commands {
+        let output = execute_shell_command(&cmd_str).await?;
+        let pattern = format!("!`{}`", cmd_str);
+        result = result.replace(&pattern, &output);
+    }
+
+    Ok(result)
+}
+
+/// Execute a shell command and return its output
+async fn execute_shell_command(cmd: &str) -> Result<String> {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", cmd]).output().await?
+    } else {
+        Command::new("sh").arg("-c").arg(cmd).output().await?
+    };
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow::anyhow!("Command failed: {}", stderr))
+    }
+}
+
+/// Extract file references from template (@filepath)
+pub fn extract_file_references(template: &str) -> Vec<String> {
+    let file_re = Regex::new(r"(?:^|[^`\w])@(\.?[^\s`,.]+(?:\.[^\s`,.]+)*)").unwrap();
+
+    file_re
+        .captures_iter(template)
+        .filter_map(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +277,29 @@ mod tests {
             ),
             "First: one, Rest: two three four"
         );
+    }
+
+    #[tokio::test]
+    async fn test_expand_template_async_with_shell() {
+        let template = "Current date: !`echo hello`";
+        let result = expand_template_async(template, &[]).await.unwrap();
+        assert!(result.contains("hello"));
+    }
+
+    #[test]
+    fn test_extract_file_references() {
+        let template = "Check @README.md and @src/main.rs for details";
+        let files = extract_file_references(template);
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"README.md".to_string()));
+        assert!(files.contains(&"src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn test_extract_file_references_with_tilde() {
+        let template = "Check @~/.config/opencode.json";
+        let files = extract_file_references(template);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], "~/.config/opencode.json");
     }
 }

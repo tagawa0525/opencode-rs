@@ -7,6 +7,10 @@ license = "MIT"
 authors = ["Opencode Team"]
 repository = "https://github.com/anomalyco/opencode"
 
+[lib]
+name = "opencode"
+path = "src/lib.rs"
+
 [[bin]]
 name = "opencode"
 path = "src/main.rs"
@@ -98,6 +102,7 @@ mime_guess = "2.0"
 
 # Markdown parsing
 pulldown-cmark = "0.13"
+yaml-rust2 = "0.9"
 
 # Temp files
 tempfile = "3.15"

@@ -1,6 +1,8 @@
 use super::{CommandContext, CommandInfo, CommandOutput, SlashCommand};
 use crate::config::CommandConfig;
-use crate::slash_command::parser::expand_template;
+use crate::slash_command::parser::{
+    expand_template, expand_template_async, extract_file_references,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -55,8 +57,15 @@ impl SlashCommand for TemplateCommand {
             super::parser::parse_quoted_args(args)
         };
 
-        // Expand template with arguments
-        let expanded = expand_template(self.template(), &parsed_args);
+        // Expand template with arguments (including shell commands)
+        let expanded = expand_template_async(self.template(), &parsed_args).await?;
+
+        // Extract file references (for future implementation)
+        let file_refs = extract_file_references(&expanded);
+        if !file_refs.is_empty() {
+            tracing::debug!("File references found: {:?}", file_refs);
+            // TODO: Handle file references - could be added to context or message
+        }
 
         // Create output that submits to LLM
         let mut output = CommandOutput::prompt(expanded);
