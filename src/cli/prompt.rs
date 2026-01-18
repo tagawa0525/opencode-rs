@@ -166,7 +166,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
             // 3. Ask user in blocking thread and send result back to async context
             let request_for_blocking = request_clone.clone();
             let (user_response_tx, user_response_rx) = tokio::sync::oneshot::channel();
-            
+
             tokio::task::spawn_blocking(move || {
                 use std::io::{self, Write};
 
@@ -209,7 +209,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
                 // Send user response back to async context via channel
                 let _ = user_response_tx.send((request_for_blocking.id, allow, scope));
             });
-            
+
             // 4. Wait for user response and then send permission response
             tokio::spawn(async move {
                 if let Ok((id, allow, scope)) = user_response_rx.await {
@@ -478,64 +478,30 @@ async fn handle_tool_calls(
     mut assistant_parts: Vec<ContentPart>,
     doom_detector: &mut DoomLoopDetector,
 ) -> Result<bool> {
-    // Check for doom loop
     doom_detector.add_calls(&result.pending_calls);
 
+    // Check for doom loop
     if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
         if !handle_doom_loop(ctx, &tool_name, &args).await? {
-            // User declined doom loop continuation
-            // Add assistant message with tool calls but don't execute them
-            for call in &result.pending_calls {
-                let args: serde_json::Value =
-                    serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
-
-                assistant_parts.push(ContentPart::ToolUse {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    input: args,
-                });
-            }
-
+            // User declined doom loop continuation - add message without executing
+            assistant_parts.extend(pending_calls_to_parts(&result.pending_calls));
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: build_chat_content(assistant_parts),
             });
-
             return Ok(false);
         }
     }
 
-    // Execute all tools - permission checks happen inside tool execution
-    // via the ToolContext's permission_handler
-    if ctx.format == "text" {
-        eprintln!(
-            "[Executing {} tool(s) in parallel...]",
-            result.pending_calls.len()
-        );
-    }
-
     // Add tool use parts to assistant message
-    for call in &result.pending_calls {
-        let args: serde_json::Value =
-            serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
-
-        assistant_parts.push(ContentPart::ToolUse {
-            id: call.id.clone(),
-            name: call.name.clone(),
-            input: args,
-        });
-    }
-
-    // Add assistant message with tool calls
+    assistant_parts.extend(pending_calls_to_parts(&result.pending_calls));
     messages.push(ChatMessage {
         role: "assistant".to_string(),
         content: build_chat_content(assistant_parts),
     });
 
-    // Execute tools (permission checks happen inside via ToolContext)
+    // Execute tools
     let tool_results = execute_tools(ctx, result.pending_calls).await;
-
-    // Add tool results to conversation
     let tool_result_msg = tool::build_tool_result_message(tool_results);
 
     if ctx.format == "text" {
@@ -543,8 +509,6 @@ async fn handle_tool_calls(
     }
 
     messages.push(tool_result_msg);
-
-    // Continue the loop
     Ok(true)
 }
 
@@ -593,33 +557,32 @@ async fn execute_tools(ctx: &PromptContext, calls: Vec<PendingToolCall>) -> Vec<
 /// Print tool results to console
 fn print_tool_results(results: &[ContentPart]) {
     for result in results {
-        if let ContentPart::ToolResult {
+        let ContentPart::ToolResult {
             tool_use_id,
             content,
             is_error,
         } = result
-        {
-            let status = if is_error.unwrap_or(false) {
-                "ERROR"
-            } else {
-                "OK"
-            };
-            eprintln!("[Tool {} result: {}]", tool_use_id, status);
+        else {
+            continue;
+        };
 
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
-                if let Some(title) = parsed.get("title") {
-                    if let Some(title_str) = title.as_str() {
-                        eprintln!("  Title: {}", title_str);
-                    }
-                }
-                if let Some(output) = parsed.get("output") {
-                    if let Some(output_str) = output.as_str() {
-                        // Use char-boundary-safe truncation
-                        let preview = truncate_str_safe(output_str, 200);
-                        eprintln!("  Output: {}", preview);
-                    }
-                }
-            }
+        let status = if is_error.unwrap_or(false) {
+            "ERROR"
+        } else {
+            "OK"
+        };
+        eprintln!("[Tool {} result: {}]", tool_use_id, status);
+
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) else {
+            continue;
+        };
+
+        if let Some(title_str) = parsed.get("title").and_then(|v| v.as_str()) {
+            eprintln!("  Title: {}", title_str);
+        }
+        if let Some(output_str) = parsed.get("output").and_then(|v| v.as_str()) {
+            let preview = truncate_str_safe(output_str, 200);
+            eprintln!("  Output: {}", preview);
         }
     }
 }
@@ -633,6 +596,22 @@ fn truncate_str_safe(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars).collect();
         format!("{}...", truncated)
     }
+}
+
+/// Convert pending tool calls to ContentPart::ToolUse
+fn pending_calls_to_parts(calls: &[PendingToolCall]) -> Vec<ContentPart> {
+    calls
+        .iter()
+        .map(|call| {
+            let args: serde_json::Value =
+                serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+            ContentPart::ToolUse {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: args,
+            }
+        })
+        .collect()
 }
 
 /// Build ChatContent from parts
