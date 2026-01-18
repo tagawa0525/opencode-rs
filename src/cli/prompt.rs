@@ -46,22 +46,31 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
 
     // Agentic loop
     let mut step = 0;
-    let max_steps = 10;
+    let max_steps = 20; // Increased from 10 to allow more complex workflows
     let mut doom_detector = DoomLoopDetector::new();
 
     loop {
         step += 1;
         if step > max_steps {
-            eprintln!("\n[Warning: Maximum agentic loop steps reached]");
+            if ctx.format == "text" {
+                eprintln!(
+                    "\n[Warning: Maximum agentic loop steps ({}) reached]",
+                    max_steps
+                );
+            }
             break;
         }
 
         if ctx.format == "text" && step > 1 {
-            eprintln!("\n[Agentic step {}]", step);
+            eprintln!("\n[Agentic step {}/{}]", step, max_steps);
         }
 
         // Stream the response
         let rx = create_provider_stream(&client, &ctx, &messages).await?;
+
+        if ctx.format == "text" && step == 1 {
+            // Don't print anything for first step
+        }
 
         // Process the stream
         let result = process_stream(rx, &ctx.format).await?;
@@ -69,6 +78,10 @@ pub async fn execute(prompt: &str, model: Option<&str>, format: &str) -> Result<
         // Handle the result
         let should_continue =
             handle_stream_result(&ctx, &mut messages, result, &mut doom_detector).await?;
+
+        if ctx.format == "text" && !should_continue {
+            eprintln!("[Agentic loop complete]");
+        }
 
         if !should_continue {
             break;
@@ -246,18 +259,25 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
     let mut response_text = String::new();
     let mut tool_tracker = ToolCallTracker::new();
     let mut finish_reason = String::new();
+    let mut last_printed_newline = false;
 
     while let Some(event) = rx.recv().await {
         match event {
             StreamEvent::TextDelta(text) => {
                 handle_text_delta(&text, format, &mut response_text);
+                last_printed_newline = false;
             }
             StreamEvent::ReasoningDelta(text) => {
                 handle_reasoning_delta(&text, format);
+                last_printed_newline = false;
             }
             StreamEvent::ToolCallStart { id, name } => {
                 if format == "text" {
-                    println!("\n[Calling tool: {}]", name);
+                    if !last_printed_newline {
+                        println!();
+                    }
+                    println!("[Calling tool: {}]", name);
+                    last_printed_newline = true;
                 }
                 tool_tracker.start_call(id, name);
             }
@@ -269,7 +289,8 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
             }
             StreamEvent::ToolCallEnd { id } => {
                 if format == "text" {
-                    println!("[Tool call {} complete]", id);
+                    println!("[Tool call {} ready]", id);
+                    last_printed_newline = true;
                 }
             }
             StreamEvent::Usage {
@@ -278,7 +299,11 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
                 ..
             } => {
                 if format == "text" {
+                    if !last_printed_newline {
+                        println!();
+                    }
                     eprintln!("[Tokens: {} in, {} out]", input_tokens, output_tokens);
+                    last_printed_newline = true;
                 }
             }
             StreamEvent::Done {
@@ -329,18 +354,25 @@ async fn handle_stream_result(
 ) -> Result<bool> {
     let mut assistant_parts: Vec<ContentPart> = Vec::new();
 
+    // Add text if present
     if !result.response_text.is_empty() {
         assistant_parts.push(ContentPart::Text {
             text: result.response_text.clone(),
         });
     }
 
-    if !result.pending_calls.is_empty() {
-        // Handle tool calls
+    // Check if there are tool calls
+    // Anthropic may return "end_turn" or "stop" even when tool calls are present
+    // So we should execute tools whenever they are present, regardless of finish_reason
+    let has_tool_calls = !result.pending_calls.is_empty();
+    let should_execute_tools = has_tool_calls;
+
+    if should_execute_tools {
+        // Handle tool calls and continue loop
         handle_tool_calls(ctx, messages, result, assistant_parts, doom_detector).await
     } else {
-        // No tool calls - add final assistant message and exit
-        handle_final_response(messages, result)
+        // No tool calls or final response - add assistant message and exit
+        handle_final_response(messages, result, assistant_parts)
     }
 }
 
@@ -357,6 +389,24 @@ async fn handle_tool_calls(
 
     if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
         if !handle_doom_loop(ctx, &tool_name, &args).await? {
+            // User declined doom loop continuation
+            // Add assistant message with tool calls but don't execute them
+            for call in &result.pending_calls {
+                let args: serde_json::Value =
+                    serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+
+                assistant_parts.push(ContentPart::ToolUse {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: args,
+                });
+            }
+
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: build_chat_content(assistant_parts),
+            });
+
             return Ok(false);
         }
     }
@@ -365,11 +415,31 @@ async fn handle_tool_calls(
     let approved_calls = check_tool_permissions(ctx, &result.pending_calls).await?;
 
     if approved_calls.is_empty() {
-        eprintln!("[No tools approved - stopping execution]");
+        if ctx.format == "text" {
+            eprintln!("[No tools approved - stopping execution]");
+        }
+
+        // Add assistant message with tool calls but don't execute them
+        for call in &result.pending_calls {
+            let args: serde_json::Value =
+                serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+
+            assistant_parts.push(ContentPart::ToolUse {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: args,
+            });
+        }
+
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: build_chat_content(assistant_parts),
+        });
+
         return Ok(false);
     }
 
-    // Add tool use parts to assistant message
+    // Add tool use parts to assistant message (only approved ones)
     for call in &approved_calls {
         let args: serde_json::Value =
             serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
@@ -391,8 +461,15 @@ async fn handle_tool_calls(
     let tool_results = execute_tools(ctx, approved_calls).await;
 
     // Add tool results to conversation
-    messages.push(tool::build_tool_result_message(tool_results));
+    let tool_result_msg = tool::build_tool_result_message(tool_results);
 
+    if ctx.format == "text" {
+        eprintln!("[Adding tool results to conversation]");
+    }
+
+    messages.push(tool_result_msg);
+
+    // Continue the loop
     Ok(true)
 }
 
@@ -450,8 +527,8 @@ async fn execute_tools(
     approved_calls: Vec<PendingToolCall>,
 ) -> Vec<ContentPart> {
     if ctx.format == "text" {
-        println!(
-            "\n[Executing {} tool(s) in parallel...]",
+        eprintln!(
+            "[Executing {} tool(s) in parallel...]",
             approved_calls.len()
         );
     }
@@ -461,6 +538,7 @@ async fn execute_tools(
     // Show tool results in text format
     if ctx.format == "text" {
         print_tool_results(&tool_results);
+        eprintln!("[Tool execution complete]");
     }
 
     tool_results
@@ -480,24 +558,34 @@ fn print_tool_results(results: &[ContentPart]) {
             } else {
                 "OK"
             };
-            println!("[Tool {} result: {}]", tool_use_id, status);
+            eprintln!("[Tool {} result: {}]", tool_use_id, status);
 
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
                 if let Some(title) = parsed.get("title") {
-                    println!("  {}", title);
+                    if let Some(title_str) = title.as_str() {
+                        eprintln!("  Title: {}", title_str);
+                    }
                 }
                 if let Some(output) = parsed.get("output") {
                     if let Some(output_str) = output.as_str() {
-                        let preview = if output_str.len() > 200 {
-                            format!("{}...", &output_str[..200])
-                        } else {
-                            output_str.to_string()
-                        };
-                        println!("  {}", preview);
+                        // Use char-boundary-safe truncation
+                        let preview = truncate_str_safe(output_str, 200);
+                        eprintln!("  Output: {}", preview);
                     }
                 }
             }
         }
+    }
+}
+
+/// Safely truncate a string at character boundaries
+fn truncate_str_safe(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...", truncated)
     }
 }
 
@@ -512,16 +600,26 @@ fn build_chat_content(parts: Vec<ContentPart>) -> ChatContent {
 }
 
 /// Handle final response when no tool calls
-fn handle_final_response(messages: &mut Vec<ChatMessage>, result: StreamResult) -> Result<bool> {
-    if !result.response_text.is_empty() {
+fn handle_final_response(
+    messages: &mut Vec<ChatMessage>,
+    result: StreamResult,
+    assistant_parts: Vec<ContentPart>,
+) -> Result<bool> {
+    // Add assistant message if we have any content
+    if !assistant_parts.is_empty() {
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: build_chat_content(assistant_parts),
+        });
+    } else if !result.response_text.is_empty() {
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: ChatContent::Text(result.response_text),
         });
     }
 
-    if result.finish_reason == "tool_calls" {
-        eprintln!("[Warning: LLM indicated tool_calls but no tools found]");
+    if result.finish_reason == "tool_calls" || result.finish_reason == "tool_use" {
+        eprintln!("[Warning: LLM indicated tool_calls but no tools found or executed]");
     }
 
     println!();
