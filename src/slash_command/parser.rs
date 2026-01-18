@@ -91,7 +91,11 @@ pub fn parse_quoted_args(input: &str) -> Vec<String> {
 }
 
 /// Expand template placeholders with arguments
-/// Supports: $1, $2, ..., $N for positional args and $ARGUMENTS for all args
+///
+/// Supports:
+/// - $1, $2, ..., $N for positional args (1-indexed, not 0-indexed like bash $0)
+/// - $ARGUMENTS for all args joined by spaces
+/// - Last numbered placeholder gets all remaining arguments
 pub fn expand_template(template: &str, args: &[String]) -> String {
     let mut result = template.to_string();
 
@@ -158,6 +162,15 @@ pub async fn expand_template_async(template: &str, args: &[String]) -> Result<St
 }
 
 /// Execute a shell command and return its output
+///
+/// # Security Warning
+///
+/// This function executes arbitrary shell commands defined in markdown templates.
+/// Only use templates from trusted sources. Malicious templates could execute
+/// dangerous commands like `rm -rf /` or exfiltrate data.
+///
+/// Template authors should validate and sanitize any user input before passing
+/// it to shell commands.
 async fn execute_shell_command(cmd: &str) -> Result<String> {
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd").args(["/C", cmd]).output().await?
@@ -174,8 +187,13 @@ async fn execute_shell_command(cmd: &str) -> Result<String> {
 }
 
 /// Extract file references from template (@filepath)
+///
+/// Matches patterns like @file.txt, @./path/file.js, @~/Documents/file.md
+/// Does not match @mentions inside backticks or preceded by alphanumeric characters
 pub fn extract_file_references(template: &str) -> Vec<String> {
-    let file_re = Regex::new(r"(?:^|[^`\w])@(\.?[^\s`,.]+(?:\.[^\s`,.]+)*)").unwrap();
+    // More permissive pattern that allows common filename characters
+    // Matches: @[optional ./~/][one or more path-like chars]
+    let file_re = Regex::new(r"(?:^|[^`\w])@([~.]?[^\s`]+)").unwrap();
 
     file_re
         .captures_iter(template)
