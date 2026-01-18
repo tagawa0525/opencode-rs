@@ -175,7 +175,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
                     "Action: Execute with arguments: {}",
                     serde_json::to_string(&request_for_blocking.metadata).unwrap_or_default()
                 );
-                eprintln!("");
+                eprintln!();
                 eprintln!("Options:");
                 eprintln!("  y/yes      - Allow once (this request only)");
                 eprintln!("  s/session  - Allow for this session (until program restarts)");

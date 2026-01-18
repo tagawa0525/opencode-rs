@@ -54,10 +54,11 @@ pub struct PermissionResponse {
 }
 
 /// Permission scope - how long the permission is valid
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionScope {
     /// Allow only this single request
+    #[default]
     Once,
     /// Allow for the current session (in-memory only)
     Session,
@@ -65,12 +66,6 @@ pub enum PermissionScope {
     Workspace,
     /// Allow globally for this user (saved to ~/.opencode/permissions.json)
     Global,
-}
-
-impl Default for PermissionScope {
-    fn default() -> Self {
-        Self::Once
-    }
 }
 
 /// Permission handler type
