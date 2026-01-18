@@ -571,22 +571,31 @@ fn render_permission_dialog(
 
     // Tool name
     if let Some(req) = &dialog.permission_request {
-        let tool_label = format!("Tool: {}", req.tool_name);
+        let tool_label = format!("Permission: {}", req.permission);
         let tool = Paragraph::new(tool_label)
             .style(Style::default().fg(theme.accent))
             .alignment(Alignment::Left);
         frame.render_widget(tool, chunks[2]);
 
-        // Arguments / Description
-        let args_text = if req.arguments.len() > 200 {
-            format!("{}\n\n{}...", req.description, &req.arguments[..200])
-        } else {
-            format!("{}\n\n{}", req.description, req.arguments)
-        };
-        let args = Paragraph::new(args_text)
+        // Patterns and metadata
+        let patterns_text = req.patterns.join(", ");
+        let metadata_text =
+            serde_json::to_string_pretty(&req.metadata).unwrap_or_else(|_| "{}".to_string());
+
+        let details_text = format!(
+            "Patterns: {}\n\nMetadata:\n{}",
+            patterns_text,
+            if metadata_text.len() > 300 {
+                format!("{}...", &metadata_text[..300])
+            } else {
+                metadata_text
+            }
+        );
+
+        let details = Paragraph::new(details_text)
             .style(Style::default().fg(theme.foreground))
             .wrap(Wrap { trim: true });
-        frame.render_widget(args, chunks[4]);
+        frame.render_widget(details, chunks[4]);
 
         // Options
         let options = vec![Line::from(vec![
@@ -596,14 +605,28 @@ fn render_permission_dialog(
                     .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" Allow once    "),
+            Span::raw(" Once    "),
             Span::styled(
-                "[A]",
+                "[S]",
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" Allow always    "),
+            Span::raw(" Session    "),
+            Span::styled(
+                "[W]",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Workspace    "),
+            Span::styled(
+                "[G]",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Global    "),
             Span::styled(
                 "[N]",
                 Style::default()
@@ -619,8 +642,9 @@ fn render_permission_dialog(
     }
 
     // Help text
-    let help = Paragraph::new("Press Y/A/N to choose | Esc: Cancel")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
+    let help =
+        Paragraph::new("Y=Once | S=Session | W=Workspace | G=Global | N=Reject | Esc=Cancel")
+            .style(Style::default().fg(theme.dim))
+            .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
 }

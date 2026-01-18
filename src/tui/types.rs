@@ -101,12 +101,14 @@ pub struct SelectItem {
 }
 
 /// Permission request for tool execution
+/// Permission request from tool execution
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
     pub id: String,
-    pub tool_name: String,
-    pub arguments: String,
-    pub description: String,
+    pub permission: String,
+    pub patterns: Vec<String>,
+    pub always: Vec<String>,
+    pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Dialog state for selection dialogs
@@ -230,7 +232,7 @@ pub enum AppEvent {
     PermissionResponse {
         id: String,
         allow: bool,
-        always: bool,
+        scope: crate::tool::PermissionScope,
     },
     // OAuth events
     DeviceCodeReceived {

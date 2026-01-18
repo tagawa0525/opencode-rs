@@ -9,6 +9,7 @@ mod config;
 mod id;
 mod oauth;
 mod permission;
+mod permission_state;
 mod provider;
 mod session;
 mod slash_command;
@@ -134,6 +135,11 @@ async fn main() -> Result<()> {
     // Change directory if specified
     if let Some(dir) = &cli.directory {
         std::env::set_current_dir(dir)?;
+    }
+
+    // Initialize permission state (load saved rules)
+    if let Err(e) = permission_state::initialize().await {
+        tracing::warn!("Failed to initialize permission state: {}", e);
     }
 
     match cli.command {

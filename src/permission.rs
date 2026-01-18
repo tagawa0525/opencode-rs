@@ -25,6 +25,10 @@ impl PermissionChecker {
         rules.insert("bash".to_string(), PermissionAction::Ask);
         rules.insert("glob".to_string(), PermissionAction::Allow);
         rules.insert("grep".to_string(), PermissionAction::Allow);
+        rules.insert("question".to_string(), PermissionAction::Allow);
+        rules.insert("todowrite".to_string(), PermissionAction::Allow);
+        rules.insert("todoread".to_string(), PermissionAction::Allow);
+        rules.insert("webfetch".to_string(), PermissionAction::Ask);
         rules.insert("doom_loop".to_string(), PermissionAction::Ask);
 
         // Apply config overrides
@@ -129,6 +133,10 @@ impl Default for PermissionChecker {
                 ("bash".to_string(), PermissionAction::Ask),
                 ("glob".to_string(), PermissionAction::Allow),
                 ("grep".to_string(), PermissionAction::Allow),
+                ("question".to_string(), PermissionAction::Allow),
+                ("todowrite".to_string(), PermissionAction::Allow),
+                ("todoread".to_string(), PermissionAction::Allow),
+                ("webfetch".to_string(), PermissionAction::Ask),
                 ("doom_loop".to_string(), PermissionAction::Ask),
             ]),
         }

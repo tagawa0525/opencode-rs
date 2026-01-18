@@ -49,7 +49,7 @@ pub fn parse_markdown(content: &str) -> Result<MarkdownFile> {
 
     // Find the closing frontmatter delimiter (handle both LF and CRLF line endings)
     let after_opening = &content[3..]; // Skip opening "---"
-    
+
     let (closing_pos, delimiter_len) = after_opening
         .find("\n---")
         .map(|pos| (pos, 4))

@@ -92,6 +92,31 @@ impl Tool for BashTool {
             return Ok(err);
         }
 
+        // Request permission before executing bash command
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("command".to_string(), serde_json::json!(args.command));
+        metadata.insert("workdir".to_string(), serde_json::json!(args.workdir));
+        metadata.insert("timeout".to_string(), serde_json::json!(args.timeout_ms));
+
+        let allowed = ctx
+            .ask_permission(
+                "bash".to_string(),
+                vec![args.command.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!(
+                    "User denied permission to execute bash command: {}",
+                    args.command
+                ),
+            ));
+        }
+
         // Execute the command
         let start = std::time::Instant::now();
         let timeout = Duration::from_millis(args.timeout_ms);
@@ -124,11 +149,21 @@ fn parse_args(args: Value, ctx: &ToolContext) -> Result<BashArgs> {
         .ok_or_else(|| anyhow::anyhow!("command is required"))?
         .to_string();
 
-    let workdir = args
+    // Resolve workdir: if not absolute, join with cwd (like TypeScript version)
+    let workdir_arg = args
         .get("workdir")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| ctx.cwd.clone());
+
+    let workdir = if std::path::Path::new(&workdir_arg).is_absolute() {
+        workdir_arg
+    } else {
+        std::path::Path::new(&ctx.cwd)
+            .join(&workdir_arg)
+            .to_string_lossy()
+            .to_string()
+    };
 
     let timeout_ms = args
         .get("timeout")

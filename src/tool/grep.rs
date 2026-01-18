@@ -82,6 +82,30 @@ impl Tool for GrepTool {
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let args = parse_args(args, ctx)?;
 
+        // Request permission before grepping
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("pattern".to_string(), json!(args.pattern));
+        metadata.insert("path".to_string(), json!(args.search_path));
+        if let Some(ref include) = args.include_pattern {
+            metadata.insert("include".to_string(), json!(include));
+        }
+
+        let allowed = ctx
+            .ask_permission(
+                "grep".to_string(),
+                vec![args.pattern.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to grep pattern: {}", args.pattern),
+            ));
+        }
+
         // Compile regex
         let regex = Regex::new(&args.pattern)
             .map_err(|e| anyhow::anyhow!("Invalid regex pattern '{}': {}", args.pattern, e))?;
@@ -108,11 +132,21 @@ fn parse_args(args: Value, ctx: &ToolContext) -> Result<GrepArgs> {
         .ok_or_else(|| anyhow::anyhow!("pattern is required"))?
         .to_string();
 
-    let search_path = args
+    // Resolve search path: if not absolute, join with cwd (like TypeScript version)
+    let search_path_arg = args
         .get("path")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| ctx.cwd.clone());
+
+    let search_path = if std::path::Path::new(&search_path_arg).is_absolute() {
+        search_path_arg
+    } else {
+        std::path::Path::new(&ctx.cwd)
+            .join(&search_path_arg)
+            .to_string_lossy()
+            .to_string()
+    };
 
     let include_pattern = args
         .get("include")

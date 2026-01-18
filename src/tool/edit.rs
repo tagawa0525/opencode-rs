@@ -3,6 +3,7 @@
 use super::*;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::path::Path;
 use tokio::fs;
 
 /// Tool for editing files via string replacement
@@ -35,7 +36,7 @@ impl Tool for EditTool {
                 "properties": {
                     "filePath": {
                         "type": "string",
-                        "description": "The absolute path to the file to modify"
+                        "description": "The path to the file to modify (absolute or relative to working directory)"
                     },
                     "oldString": {
                         "type": "string",
@@ -56,7 +57,7 @@ impl Tool for EditTool {
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let file_path = args
+        let file_path_arg = args
             .get("filePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("filePath is required"))?;
@@ -76,15 +77,21 @@ impl Tool for EditTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Validate path
-        let path = validate_path(file_path, &ctx.root)?;
+        // Resolve path: if not absolute, join with cwd (like TypeScript version)
+        let file_path = Path::new(file_path_arg);
+        let resolved_path = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            Path::new(&ctx.cwd).join(file_path)
+        };
+
+        // Validate path is within project root
+        let path = validate_path(resolved_path.to_string_lossy().as_ref(), &ctx.root)?;
+        let display_path = path.display().to_string();
 
         // Check if file exists
         if !path.exists() {
-            return Ok(ToolResult::error(
-                format!("File not found: {}", file_path),
-                format!("The file '{}' does not exist", file_path),
-            ));
+            return Err(anyhow::anyhow!("File not found: {}", display_path));
         }
 
         // Read current content
@@ -94,22 +101,40 @@ impl Tool for EditTool {
         let occurrences = content.matches(old_string).count();
 
         if occurrences == 0 {
-            return Ok(ToolResult::error(
-                format!("String not found in {}", file_path),
-                format!(
-                    "The oldString was not found in the file content.\n\nSearched for:\n{}\n\nMake sure the string matches exactly, including whitespace and indentation.",
-                    old_string
-                ),
+            return Err(anyhow::anyhow!(
+                "oldString not found in content.\n\nSearched for:\n{}\n\nMake sure the string matches exactly, including whitespace and indentation.",
+                old_string
             ));
         }
 
         if occurrences > 1 && !replace_all {
+            return Err(anyhow::anyhow!(
+                "oldString found multiple times ({} occurrences) and requires more code context to uniquely identify the intended match.\n\nEither provide more surrounding lines in oldString to make it unique, or set replaceAll: true to replace all occurrences.",
+                occurrences
+            ));
+        }
+
+        // Request permission before editing
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("filePath".to_string(), json!(display_path));
+        metadata.insert("oldString".to_string(), json!(old_string));
+        metadata.insert("newString".to_string(), json!(new_string));
+        metadata.insert("replaceAll".to_string(), json!(replace_all));
+        metadata.insert("occurrences".to_string(), json!(occurrences));
+
+        let allowed = ctx
+            .ask_permission(
+                "edit".to_string(),
+                vec![display_path.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
             return Ok(ToolResult::error(
-                format!("Multiple matches in {}", file_path),
-                format!(
-                    "The oldString was found {} times in the file.\n\nEither:\n1. Provide more context in oldString to make it unique, or\n2. Set replaceAll: true to replace all occurrences",
-                    occurrences
-                ),
+                "Permission Denied",
+                format!("User denied permission to edit file: {}", display_path),
             ));
         }
 
@@ -123,7 +148,7 @@ impl Tool for EditTool {
         // Check if anything changed
         if new_content == content {
             return Ok(ToolResult::success(
-                format!("No changes to {}", file_path),
+                format!("No changes to {}", display_path),
                 "The oldString and newString are identical, no changes made.",
             ));
         }
@@ -137,14 +162,14 @@ impl Tool for EditTool {
         let line_diff = new_lines as i64 - old_lines as i64;
 
         let title = if replace_all && occurrences > 1 {
-            format!("Edited {} ({} replacements)", file_path, occurrences)
+            format!("Edited {} ({} replacements)", display_path, occurrences)
         } else {
-            format!("Edited {}", file_path)
+            format!("Edited {}", display_path)
         };
 
         let output = format!(
             "Successfully edited {}\nReplacements made: {}\nLines: {} -> {} ({:+})",
-            file_path,
+            display_path,
             if replace_all { occurrences } else { 1 },
             old_lines,
             new_lines,
@@ -156,7 +181,7 @@ impl Tool for EditTool {
             output,
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("path".to_string(), json!(file_path));
+                m.insert("path".to_string(), json!(display_path));
                 m.insert(
                     "replacements".to_string(),
                     json!(if replace_all { occurrences } else { 1 }),

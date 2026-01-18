@@ -9,8 +9,12 @@ mod edit;
 mod executor;
 mod glob;
 mod grep;
+mod invalid;
+mod question;
 mod read;
 mod registry;
+mod todo;
+mod webfetch;
 mod write;
 
 pub use bash::BashTool;
@@ -18,14 +22,56 @@ pub use edit::EditTool;
 pub use executor::*;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
+pub use invalid::InvalidTool;
+pub use question::QuestionTool;
 pub use read::ReadTool;
 pub use registry::*;
+pub use todo::{TodoReadTool, TodoWriteTool};
+pub use webfetch::WebFetchTool;
 pub use write::WriteTool;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Permission request for tool execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRequest {
+    pub id: String,
+    pub permission: String,
+    pub patterns: Vec<String>,
+    pub always: Vec<String>,
+    pub metadata: HashMap<String, Value>,
+}
+
+/// Permission response from user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionResponse {
+    pub id: String,
+    pub allow: bool,
+    pub scope: PermissionScope,
+}
+
+/// Permission scope - how long the permission is valid
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionScope {
+    /// Allow only this single request
+    #[default]
+    Once,
+    /// Allow for the current session (in-memory only)
+    Session,
+    /// Allow for this workspace/project (saved to .opencode/permissions.json)
+    Workspace,
+    /// Allow globally for this user (saved to ~/.opencode/permissions.json)
+    Global,
+}
+
+/// Permission handler type
+pub type PermissionHandler = std::sync::Arc<
+    dyn Fn(PermissionRequest) -> tokio::sync::oneshot::Receiver<PermissionResponse> + Send + Sync,
+>;
 
 /// Tool definition that can be sent to the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +101,8 @@ pub struct ToolContext {
     pub root: String,
     /// Extra context data
     pub extra: HashMap<String, Value>,
+    /// Permission handler
+    pub permission_handler: Option<PermissionHandler>,
 }
 
 impl ToolContext {
@@ -71,6 +119,7 @@ impl ToolContext {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
             extra: HashMap::new(),
+            permission_handler: None,
         }
     }
 
@@ -89,9 +138,42 @@ impl ToolContext {
         self
     }
 
+    pub fn with_permission_handler(mut self, handler: PermissionHandler) -> Self {
+        self.permission_handler = Some(handler);
+        self
+    }
+
     /// Check if execution should be aborted
     pub fn is_aborted(&self) -> bool {
         self.abort.as_ref().map(|rx| *rx.borrow()).unwrap_or(false)
+    }
+
+    /// Request permission from user
+    pub async fn ask_permission(
+        &self,
+        permission: String,
+        patterns: Vec<String>,
+        always: Vec<String>,
+        metadata: HashMap<String, Value>,
+    ) -> Result<bool> {
+        if let Some(handler) = &self.permission_handler {
+            let request = PermissionRequest {
+                id: uuid::Uuid::new_v4().to_string(),
+                permission,
+                patterns,
+                always,
+                metadata,
+            };
+
+            let rx = handler(request);
+            match rx.await {
+                Ok(response) => Ok(response.allow),
+                Err(_) => anyhow::bail!("Permission request cancelled"),
+            }
+        } else {
+            // No permission handler, default to deny for safety
+            Ok(false)
+        }
     }
 }
 
