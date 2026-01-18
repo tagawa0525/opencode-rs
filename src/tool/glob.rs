@@ -69,6 +69,27 @@ impl Tool for GlobTool {
                 .to_string()
         };
 
+        // Request permission before globbing
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("pattern".to_string(), json!(pattern));
+        metadata.insert("path".to_string(), json!(search_path));
+
+        let allowed = ctx
+            .ask_permission(
+                "glob".to_string(),
+                vec![pattern.to_string()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to glob pattern: {}", pattern),
+            ));
+        }
+
         // Build the glob pattern
         let glob_pattern = if Path::new(pattern).is_absolute() {
             pattern.to_string()

@@ -82,6 +82,30 @@ impl Tool for GrepTool {
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let args = parse_args(args, ctx)?;
 
+        // Request permission before grepping
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("pattern".to_string(), json!(args.pattern));
+        metadata.insert("path".to_string(), json!(args.search_path));
+        if let Some(ref include) = args.include_pattern {
+            metadata.insert("include".to_string(), json!(include));
+        }
+
+        let allowed = ctx
+            .ask_permission(
+                "grep".to_string(),
+                vec![args.pattern.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to grep pattern: {}", args.pattern),
+            ));
+        }
+
         // Compile regex
         let regex = Regex::new(&args.pattern)
             .map_err(|e| anyhow::anyhow!("Invalid regex pattern '{}': {}", args.pattern, e))?;

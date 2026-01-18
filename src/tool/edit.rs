@@ -114,6 +114,30 @@ impl Tool for EditTool {
             ));
         }
 
+        // Request permission before editing
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("filePath".to_string(), json!(display_path));
+        metadata.insert("oldString".to_string(), json!(old_string));
+        metadata.insert("newString".to_string(), json!(new_string));
+        metadata.insert("replaceAll".to_string(), json!(replace_all));
+        metadata.insert("occurrences".to_string(), json!(occurrences));
+
+        let allowed = ctx
+            .ask_permission(
+                "edit".to_string(),
+                vec![display_path.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to edit file: {}", display_path),
+            ));
+        }
+
         // Perform replacement
         let new_content = if replace_all {
             content.replace(old_string, new_string)

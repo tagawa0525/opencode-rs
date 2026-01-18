@@ -128,11 +128,103 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
     // Create permission checker
     let permission_checker = PermissionChecker::from_config(&config);
 
+    // Create CLI permission handler
+    let permission_handler: tool::PermissionHandler = std::sync::Arc::new(move |request| {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        // Spawn async task to check approved rules and handle the request
+        let request_clone = request.clone();
+        tokio::spawn(async move {
+            // 1. Check if this request matches any approved rules
+            if crate::permission_state::check_auto_approve(&request_clone).await {
+                // Auto-approved - respond immediately
+                let _ = response_tx.send(tool::PermissionResponse {
+                    id: request_clone.id.clone(),
+                    allow: true,
+                    scope: tool::PermissionScope::Session,
+                });
+                return;
+            }
+
+            // 2. Not approved - need to ask the user
+            // Store response channel for later use
+            crate::permission_state::store_response_channel(request_clone.id.clone(), response_tx)
+                .await;
+
+            // Store pending request for potential auto-approval
+            crate::permission_state::store_pending_request(
+                crate::permission_state::PermissionRequestInfo {
+                    id: request_clone.id.clone(),
+                    permission: request_clone.permission.clone(),
+                    patterns: request_clone.patterns.clone(),
+                    always: request_clone.always.clone(),
+                    metadata: request_clone.metadata.clone(),
+                },
+            )
+            .await;
+
+            // 3. Ask user in blocking thread
+            let request_for_blocking = request_clone.clone();
+            tokio::task::spawn_blocking(move || {
+                use std::io::{self, Write};
+
+                eprintln!("\n[Permission Required]");
+                eprintln!("Tool: {}", request_for_blocking.permission);
+                eprintln!("Patterns: {:?}", request_for_blocking.patterns);
+                eprintln!(
+                    "Action: Execute with arguments: {}",
+                    serde_json::to_string(&request_for_blocking.metadata).unwrap_or_default()
+                );
+                eprintln!("");
+                eprintln!("Options:");
+                eprintln!("  y/yes      - Allow once (this request only)");
+                eprintln!("  s/session  - Allow for this session (until program restarts)");
+                eprintln!("  w/workspace- Allow for this workspace (saved to .opencode/)");
+                eprintln!("  g/global   - Allow globally for this user");
+                eprintln!("  n/no       - Deny this request");
+                eprint!("\nChoice [Y/s/w/g/n]: ");
+                let _ = io::stderr().flush();
+
+                let mut input = String::new();
+                let _ = io::stdin().read_line(&mut input);
+
+                let answer = input.trim().to_lowercase();
+
+                // Parse the response
+                let (allow, scope) = if answer.is_empty() || answer == "y" || answer == "yes" {
+                    (true, tool::PermissionScope::Once)
+                } else if answer == "s" || answer == "session" {
+                    (true, tool::PermissionScope::Session)
+                } else if answer == "w" || answer == "workspace" {
+                    (true, tool::PermissionScope::Workspace)
+                } else if answer == "g" || answer == "global" {
+                    (true, tool::PermissionScope::Global)
+                } else {
+                    // "n", "no", or anything else = deny
+                    (false, tool::PermissionScope::Once)
+                };
+
+                // Send response via global state handler
+                tokio::runtime::Handle::current().block_on(async {
+                    crate::permission_state::send_permission_response(
+                        request_for_blocking.id,
+                        allow,
+                        scope,
+                    )
+                    .await;
+                });
+            });
+        });
+
+        response_rx
+    });
+
     // Create tool context
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
     let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
         .with_cwd(cwd.clone())
-        .with_root(cwd.clone());
+        .with_root(cwd.clone())
+        .with_permission_handler(permission_handler);
 
     // Generate system prompt
     let system_prompt = crate::session::system::generate(&cwd, &provider_id, &model_id);

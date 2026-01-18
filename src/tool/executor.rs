@@ -94,90 +94,92 @@ pub async fn execute_all_tools(
     results
 }
 
-/// Process all pending tool calls in parallel and add results to conversation
+/// Process all pending tool calls in parallel with concurrency limit
+///
+/// This function uses a semaphore to limit concurrent execution to MAX_PARALLEL_TOOLS.
+/// - All tool calls are queued immediately
+/// - Up to MAX_PARALLEL_TOOLS execute concurrently
+/// - As soon as one completes, the next one starts immediately (not in batches)
+/// - Example: With 48 calls and limit of 10:
+///   - Tasks 1-10 start immediately
+///   - When task 1 finishes, task 11 starts immediately
+///   - When task 2 finishes, task 12 starts immediately
+///   - And so on until all 48 are complete
 pub async fn execute_all_tools_parallel(
     pending_calls: Vec<PendingToolCall>,
     ctx: &ToolContext,
 ) -> Vec<ContentPart> {
-    use futures::future::join_all;
+    use futures::stream::{FuturesUnordered, StreamExt};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
 
-    // Limit parallel execution to MAX_PARALLEL_TOOLS (matches TypeScript implementation)
-    let (allowed_calls, discarded_calls): (Vec<_>, Vec<_>) = pending_calls
-        .into_iter()
-        .enumerate()
-        .partition(|(i, _)| *i < MAX_PARALLEL_TOOLS);
+    let total_calls = pending_calls.len();
 
-    let mut results = Vec::new();
+    // Create a semaphore to limit concurrent execution to MAX_PARALLEL_TOOLS
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_TOOLS));
 
-    // Add error results for discarded calls
-    for (_, call) in discarded_calls {
-        let error_json = serde_json::json!({
-            "title": "Tool Execution Error",
-            "error": format!(
-                "Maximum parallel tool limit exceeded. Only {} tools can be executed in parallel. This tool call was discarded.",
-                MAX_PARALLEL_TOOLS
-            ),
-        });
+    // Create futures for ALL tool executions (not just the first MAX_PARALLEL_TOOLS)
+    // The semaphore will control how many actually run concurrently
+    let mut futures = FuturesUnordered::new();
 
-        results.push(ContentPart::ToolResult {
-            tool_use_id: call.id,
-            content: serde_json::to_string(&error_json)
-                .unwrap_or_else(|_| "Maximum parallel tool limit exceeded".to_string()),
-            is_error: Some(true),
-        });
-    }
+    for call in pending_calls {
+        let ctx = ctx.clone();
+        let semaphore = semaphore.clone();
 
-    // Create futures for allowed tool executions
-    let futures: Vec<_> = allowed_calls
-        .into_iter()
-        .map(|(_, call)| {
-            let ctx = ctx.clone();
-            async move {
-                // Execute the tool
-                let result = execute_tool(&call.name, &call.arguments, &call.id, &ctx).await;
+        let future = async move {
+            // Acquire semaphore permit (blocks if MAX_PARALLEL_TOOLS already running)
+            // As soon as one task completes and releases its permit, this will proceed
+            let _permit = semaphore.acquire().await.expect("Semaphore closed");
 
-                // Convert to content part
-                match result {
-                    Ok(tool_result) => {
-                        // Format output as JSON with title and output
-                        let output_json = serde_json::json!({
-                            "title": tool_result.title,
-                            "output": tool_result.output,
-                            "metadata": tool_result.metadata,
-                            "truncated": tool_result.truncated,
-                        });
+            // Execute the tool
+            let result = execute_tool(&call.name, &call.arguments, &call.id, &ctx).await;
 
-                        ContentPart::ToolResult {
-                            tool_use_id: call.id.clone(),
-                            content: serde_json::to_string(&output_json)
-                                .unwrap_or(tool_result.output),
-                            is_error: Some(false),
-                        }
+            // Convert to content part
+            match result {
+                Ok(tool_result) => {
+                    // Format output as JSON with title and output
+                    let output_json = serde_json::json!({
+                        "title": tool_result.title,
+                        "output": tool_result.output,
+                        "metadata": tool_result.metadata,
+                        "truncated": tool_result.truncated,
+                    });
+
+                    ContentPart::ToolResult {
+                        tool_use_id: call.id.clone(),
+                        content: serde_json::to_string(&output_json).unwrap_or(tool_result.output),
+                        is_error: Some(false),
                     }
-                    Err(e) => {
-                        // Error result
-                        let error_json = serde_json::json!({
-                            "title": "Tool Execution Error",
-                            "error": e.to_string(),
-                        });
+                }
+                Err(e) => {
+                    // Error result
+                    let error_json = serde_json::json!({
+                        "title": "Tool Execution Error",
+                        "error": e.to_string(),
+                    });
 
-                        ContentPart::ToolResult {
-                            tool_use_id: call.id.clone(),
-                            content: serde_json::to_string(&error_json)
-                                .unwrap_or_else(|_| e.to_string()),
-                            is_error: Some(true),
-                        }
+                    ContentPart::ToolResult {
+                        tool_use_id: call.id.clone(),
+                        content: serde_json::to_string(&error_json)
+                            .unwrap_or_else(|_| e.to_string()),
+                        is_error: Some(true),
                     }
                 }
             }
-        })
-        .collect();
+        };
 
-    // Execute allowed tools in parallel
-    let mut parallel_results = join_all(futures).await;
+        futures.push(future);
+    }
 
-    // Combine discarded errors with parallel results
-    results.append(&mut parallel_results);
+    // Collect all results as they complete
+    // FuturesUnordered + semaphore ensures:
+    // - At most MAX_PARALLEL_TOOLS run concurrently
+    // - New tasks start immediately when a slot becomes available
+    // - Results are collected in completion order (may differ from submission order)
+    let mut results = Vec::with_capacity(total_calls);
+    while let Some(result) = futures.next().await {
+        results.push(result);
+    }
 
     results
 }

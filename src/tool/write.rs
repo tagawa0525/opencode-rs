@@ -82,13 +82,36 @@ impl Tool for WriteTool {
             0
         };
 
+        let display_path = path.display().to_string();
+
+        // Request permission before writing
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("filePath".to_string(), json!(display_path));
+        metadata.insert("existed".to_string(), json!(existed));
+        metadata.insert("contentLength".to_string(), json!(content.len()));
+
+        let allowed = ctx
+            .ask_permission(
+                "write".to_string(),
+                vec![display_path.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to write file: {}", display_path),
+            ));
+        }
+
         // Write the file
         fs::write(&path, content).await?;
 
         let lines = content.lines().count();
         let bytes = content.len();
 
-        let display_path = path.display().to_string();
         let title = if existed {
             format!("Updated {} ({} lines)", display_path, lines)
         } else {

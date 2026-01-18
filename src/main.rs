@@ -9,6 +9,7 @@ mod config;
 mod id;
 mod oauth;
 mod permission;
+mod permission_state;
 mod provider;
 mod session;
 mod slash_command;

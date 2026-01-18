@@ -16,6 +16,11 @@ use crate::provider::{
 };
 use crate::tool::{self, DoomLoopDetector, PendingToolCall, ToolCallTracker, ToolContext};
 
+/// Send permission response to waiting tool
+pub async fn send_permission_response(id: String, allow: bool, scope: tool::PermissionScope) {
+    crate::permission_state::send_permission_response(id, allow, scope).await;
+}
+
 /// Context for streaming operations
 struct StreamContext {
     provider_id: String,
@@ -128,15 +133,62 @@ async fn initialize_stream_context(
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| ".".to_string());
 
-    let tool_ctx = Arc::new(ToolContext {
-        session_id: String::new(),
-        message_id: String::new(),
-        agent: "tui".to_string(),
-        abort: None,
-        cwd: cwd.clone(),
-        root: cwd.clone(),
-        extra: Default::default(),
+    // Create permission handler
+    let event_tx_clone = event_tx.clone();
+    let permission_handler: tool::PermissionHandler = Arc::new(move |request| {
+        let event_tx = event_tx_clone.clone();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        // Spawn async task to check approved rules and handle the request
+        let request_clone = request.clone();
+        tokio::spawn(async move {
+            // 1. Check if this request matches any approved rules
+            if crate::permission_state::check_auto_approve(&request_clone).await {
+                // Auto-approved - respond immediately
+                let _ = response_tx.send(tool::PermissionResponse {
+                    id: request_clone.id.clone(),
+                    allow: true,
+                    scope: tool::PermissionScope::Session, // Auto-approved from cached rules
+                });
+                return;
+            }
+
+            // 2. Not approved - need to ask the user
+            // Store response channel for later use
+            crate::permission_state::store_response_channel(request_clone.id.clone(), response_tx)
+                .await;
+
+            // Store pending request for potential auto-approval
+            crate::permission_state::store_pending_request(
+                crate::permission_state::PermissionRequestInfo {
+                    id: request_clone.id.clone(),
+                    permission: request_clone.permission.clone(),
+                    patterns: request_clone.patterns.clone(),
+                    always: request_clone.always.clone(),
+                    metadata: request_clone.metadata.clone(),
+                },
+            )
+            .await;
+
+            // 3. Send permission request event to TUI
+            let _ = event_tx.try_send(AppEvent::PermissionRequested(PermissionRequest {
+                id: request_clone.id,
+                permission: request_clone.permission,
+                patterns: request_clone.patterns,
+                always: request_clone.always,
+                metadata: request_clone.metadata,
+            }));
+        });
+
+        response_rx
     });
+
+    let tool_ctx = Arc::new(
+        ToolContext::new("", "", "tui")
+            .with_cwd(cwd.clone())
+            .with_root(cwd.clone())
+            .with_permission_handler(permission_handler),
+    );
 
     // Generate system prompt
     let system_prompt = crate::session::system::generate(&cwd, provider_id, model_id);
@@ -340,15 +392,20 @@ async fn handle_doom_loop(
     step: i32,
 ) -> Result<bool> {
     let req_id = format!("doom_loop_{}", step);
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("tool_name".to_string(), serde_json::json!(tool_name));
+    metadata.insert("args".to_string(), serde_json::json!(args));
+    metadata.insert(
+        "threshold".to_string(),
+        serde_json::json!(tool::DOOM_LOOP_THRESHOLD),
+    );
+
     let request = PermissionRequest {
         id: req_id,
-        tool_name: "doom_loop".to_string(),
-        arguments: format!("Tool '{}' with args: {}", tool_name, args),
-        description: format!(
-            "Doom loop detected: '{}' called {} times with identical arguments",
-            tool_name,
-            tool::DOOM_LOOP_THRESHOLD
-        ),
+        permission: "doom_loop".to_string(),
+        patterns: vec![tool_name.to_string()],
+        always: vec!["doom_loop".to_string()],
+        metadata,
     };
 
     let _ = ctx
@@ -392,11 +449,16 @@ async fn check_tool_permissions(
 /// Request permission for a tool call
 async fn request_tool_permission(ctx: &StreamContext, call: &PendingToolCall, step: i32) {
     let req_id = format!("tool_{}_{}", call.id, step);
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("tool_name".to_string(), serde_json::json!(call.name));
+    metadata.insert("arguments".to_string(), serde_json::json!(call.arguments));
+
     let request = PermissionRequest {
         id: req_id,
-        tool_name: call.name.clone(),
-        arguments: call.arguments.clone(),
-        description: format!("Allow tool '{}' to execute?", call.name),
+        permission: call.name.clone(),
+        patterns: vec!["*".to_string()],
+        always: vec!["*".to_string()],
+        metadata,
     };
 
     let _ = ctx

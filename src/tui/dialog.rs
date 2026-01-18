@@ -462,17 +462,37 @@ async fn handle_permission_input(
                 .send(AppEvent::PermissionResponse {
                     id,
                     allow: true,
-                    always: false,
+                    scope: crate::tool::PermissionScope::Once,
                 })
                 .await;
         }
-        KeyCode::Char('a') | KeyCode::Char('A') => {
+        KeyCode::Char('s') | KeyCode::Char('S') => {
             app.close_dialog();
             let _ = event_tx
                 .send(AppEvent::PermissionResponse {
                     id,
                     allow: true,
-                    always: true,
+                    scope: crate::tool::PermissionScope::Session,
+                })
+                .await;
+        }
+        KeyCode::Char('w') | KeyCode::Char('W') => {
+            app.close_dialog();
+            let _ = event_tx
+                .send(AppEvent::PermissionResponse {
+                    id,
+                    allow: true,
+                    scope: crate::tool::PermissionScope::Workspace,
+                })
+                .await;
+        }
+        KeyCode::Char('g') | KeyCode::Char('G') => {
+            app.close_dialog();
+            let _ = event_tx
+                .send(AppEvent::PermissionResponse {
+                    id,
+                    allow: true,
+                    scope: crate::tool::PermissionScope::Global,
                 })
                 .await;
         }
@@ -482,7 +502,7 @@ async fn handle_permission_input(
                 .send(AppEvent::PermissionResponse {
                     id,
                     allow: false,
-                    always: false,
+                    scope: crate::tool::PermissionScope::Once,
                 })
                 .await;
         }

@@ -92,6 +92,33 @@ impl Tool for WebFetchTool {
             params.url.clone()
         };
 
+        // Request permission before fetching
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("url".to_string(), json!(url));
+        metadata.insert("format".to_string(), json!(params.format));
+        if let Some(timeout) = params.timeout {
+            metadata.insert("timeout".to_string(), json!(timeout));
+        }
+
+        // Extract domain from URL for pattern matching
+        let domain_pattern = extract_domain_pattern(&url);
+
+        let allowed = ctx
+            .ask_permission(
+                "webfetch".to_string(),
+                vec![url.clone()],
+                vec![domain_pattern, "*".to_string()], // Allow domain pattern or all URLs
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to fetch URL: {}", url),
+            ));
+        }
+
         // Set timeout
         let timeout_secs = params.timeout.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT);
         let timeout = std::time::Duration::from_secs(timeout_secs);
@@ -250,4 +277,23 @@ fn extract_text_from_html(html: &str) -> String {
     // For now, use the same implementation as markdown conversion
     // TODO: Implement proper text extraction
     convert_html_to_markdown(html)
+}
+
+/// Extract domain pattern from URL for permission matching
+/// e.g., "https://crates.io/api/v1/crates/tokio" -> "https://crates.io/*"
+fn extract_domain_pattern(url: &str) -> String {
+    // Simple regex-free approach
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(path_start) = after_scheme.find('/') {
+            let scheme = &url[..scheme_end];
+            let domain = &after_scheme[..path_start];
+            return format!("{}://{}/*", scheme, domain);
+        } else {
+            // No path, just domain
+            return format!("{}/*", url);
+        }
+    }
+    // Fallback: just return the URL itself
+    url.to_string()
 }

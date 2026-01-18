@@ -95,6 +95,27 @@ impl Tool for ReadTool {
 
         // Validate path is within project root
         let path = validate_path(resolved_path.to_string_lossy().as_ref(), &ctx.root)?;
+        let display_path = path.display().to_string();
+
+        // Request permission before reading
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("filePath".to_string(), json!(display_path));
+
+        let allowed = ctx
+            .ask_permission(
+                "read".to_string(),
+                vec![display_path.clone()],
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if !allowed {
+            return Ok(ToolResult::error(
+                "Permission Denied",
+                format!("User denied permission to read file: {}", display_path),
+            ));
+        }
 
         // Check if file exists - provide suggestions if not found (like TypeScript version)
         if !path.exists() {

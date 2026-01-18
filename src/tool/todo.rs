@@ -95,6 +95,16 @@ impl Tool for TodoWriteTool {
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let params: TodoWriteParams = serde_json::from_value(args)?;
 
+        // Request permission
+        let metadata = HashMap::new();
+        ctx.ask_permission(
+            "todowrite".to_string(),
+            vec!["*".to_string()],
+            vec!["*".to_string()],
+            metadata,
+        )
+        .await?;
+
         // Save todos to file
         let todo_path = get_todo_path(&ctx.session_id)?;
         let json = serde_json::to_string_pretty(&params.todos)?;
@@ -143,6 +153,16 @@ impl Tool for TodoReadTool {
     }
 
     async fn execute(&self, _args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        // Request permission
+        let metadata = HashMap::new();
+        ctx.ask_permission(
+            "todoread".to_string(),
+            vec!["*".to_string()],
+            vec!["*".to_string()],
+            metadata,
+        )
+        .await?;
+
         // Read todos from file
         let todo_path = get_todo_path(&ctx.session_id)?;
 
