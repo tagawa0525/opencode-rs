@@ -315,6 +315,146 @@ async fn should_auto_approve(request_id: &str) -> bool {
     check_patterns_against_rules(&request.permission, &request.patterns).await
 }
 
+/// Create a CLI permission handler that prompts the user in the terminal
+pub fn create_cli_permission_handler() -> crate::tool::PermissionHandler {
+    use std::io::{self, Write};
+
+    std::sync::Arc::new(move |request| {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request_clone = request.clone();
+        tokio::spawn(async move {
+            // Check if this request matches any approved rules
+            if check_auto_approve(&request_clone).await {
+                let _ = response_tx.send(tool::PermissionResponse {
+                    id: request_clone.id.clone(),
+                    allow: true,
+                    scope: tool::PermissionScope::Session,
+                });
+                return;
+            }
+
+            // Store response channel for later use
+            store_response_channel(request_clone.id.clone(), response_tx).await;
+
+            // Store pending request for potential auto-approval
+            store_pending_request(PermissionRequestInfo {
+                id: request_clone.id.clone(),
+                permission: request_clone.permission.clone(),
+                patterns: request_clone.patterns.clone(),
+                always: request_clone.always.clone(),
+                metadata: request_clone.metadata.clone(),
+            })
+            .await;
+
+            // Ask user in blocking thread
+            let request_for_blocking = request_clone.clone();
+            let (user_response_tx, user_response_rx) = tokio::sync::oneshot::channel();
+
+            tokio::task::spawn_blocking(move || {
+                eprintln!("\n[Permission Required]");
+                eprintln!("Tool: {}", request_for_blocking.permission);
+                eprintln!("Patterns: {:?}", request_for_blocking.patterns);
+                eprintln!(
+                    "Action: Execute with arguments: {}",
+                    serde_json::to_string(&request_for_blocking.metadata).unwrap_or_default()
+                );
+                eprintln!();
+                eprintln!("Options:");
+                eprintln!("  y/yes      - Allow once (this request only)");
+                eprintln!("  s/session  - Allow for this session (until program restarts)");
+                eprintln!("  w/workspace- Allow for this workspace (saved to .opencode/)");
+                eprintln!("  g/global   - Allow globally for this user");
+                eprintln!("  n/no       - Deny this request");
+                eprint!("\nChoice [Y/s/w/g/n]: ");
+                let _ = io::stderr().flush();
+
+                let mut input = String::new();
+                let _ = io::stdin().read_line(&mut input);
+
+                let answer = input.trim().to_lowercase();
+                let (allow, scope) = parse_permission_choice(&answer);
+
+                let _ = user_response_tx.send((request_for_blocking.id, allow, scope));
+            });
+
+            // Wait for user response and send permission response
+            tokio::spawn(async move {
+                if let Ok((id, allow, scope)) = user_response_rx.await {
+                    send_permission_response(id, allow, scope).await;
+                }
+            });
+        });
+
+        response_rx
+    })
+}
+
+/// Parse user's permission choice into (allow, scope) tuple
+fn parse_permission_choice(answer: &str) -> (bool, PermissionScope) {
+    if answer.is_empty() || answer == "y" || answer == "yes" {
+        (true, PermissionScope::Once)
+    } else if answer == "s" || answer == "session" {
+        (true, PermissionScope::Session)
+    } else if answer == "w" || answer == "workspace" {
+        (true, PermissionScope::Workspace)
+    } else if answer == "g" || answer == "global" {
+        (true, PermissionScope::Global)
+    } else {
+        (false, PermissionScope::Once)
+    }
+}
+
+/// Create a TUI permission handler that sends requests via event channel
+pub fn create_tui_permission_handler(
+    event_tx: tokio::sync::mpsc::Sender<crate::tui::AppEvent>,
+) -> crate::tool::PermissionHandler {
+    std::sync::Arc::new(move |request| {
+        let event_tx = event_tx.clone();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request_clone = request.clone();
+        tokio::spawn(async move {
+            // Check if this request matches any approved rules
+            if check_auto_approve(&request_clone).await {
+                let _ = response_tx.send(tool::PermissionResponse {
+                    id: request_clone.id.clone(),
+                    allow: true,
+                    scope: tool::PermissionScope::Session,
+                });
+                return;
+            }
+
+            // Store response channel for later use
+            store_response_channel(request_clone.id.clone(), response_tx).await;
+
+            // Store pending request for potential auto-approval
+            store_pending_request(PermissionRequestInfo {
+                id: request_clone.id.clone(),
+                permission: request_clone.permission.clone(),
+                patterns: request_clone.patterns.clone(),
+                always: request_clone.always.clone(),
+                metadata: request_clone.metadata.clone(),
+            })
+            .await;
+
+            // Send permission request event to TUI
+            let _ = event_tx
+                .try_send(crate::tui::AppEvent::PermissionRequested(
+                    crate::tui::PermissionRequest {
+                        id: request_clone.id,
+                        permission: request_clone.permission,
+                        patterns: request_clone.patterns,
+                        always: request_clone.always,
+                        metadata: request_clone.metadata,
+                    },
+                ));
+        });
+
+        response_rx
+    })
+}
+
 /// Wildcard matching supporting multiple asterisks
 /// Supports patterns like:
 /// - "*" matches everything

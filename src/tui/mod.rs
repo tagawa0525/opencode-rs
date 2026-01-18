@@ -8,6 +8,7 @@ mod clipboard;
 mod command_handler;
 mod components;
 mod dialog;
+mod dialog_render;
 mod input;
 mod llm_streaming;
 mod model;

@@ -133,55 +133,8 @@ async fn initialize_stream_context(
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| ".".to_string());
 
-    // Create permission handler
-    let event_tx_clone = event_tx.clone();
-    let permission_handler: tool::PermissionHandler = Arc::new(move |request| {
-        let event_tx = event_tx_clone.clone();
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-        // Spawn async task to check approved rules and handle the request
-        let request_clone = request.clone();
-        tokio::spawn(async move {
-            // 1. Check if this request matches any approved rules
-            if crate::permission_state::check_auto_approve(&request_clone).await {
-                // Auto-approved - respond immediately
-                let _ = response_tx.send(tool::PermissionResponse {
-                    id: request_clone.id.clone(),
-                    allow: true,
-                    scope: tool::PermissionScope::Session, // Auto-approved from cached rules
-                });
-                return;
-            }
-
-            // 2. Not approved - need to ask the user
-            // Store response channel for later use
-            crate::permission_state::store_response_channel(request_clone.id.clone(), response_tx)
-                .await;
-
-            // Store pending request for potential auto-approval
-            crate::permission_state::store_pending_request(
-                crate::permission_state::PermissionRequestInfo {
-                    id: request_clone.id.clone(),
-                    permission: request_clone.permission.clone(),
-                    patterns: request_clone.patterns.clone(),
-                    always: request_clone.always.clone(),
-                    metadata: request_clone.metadata.clone(),
-                },
-            )
-            .await;
-
-            // 3. Send permission request event to TUI
-            let _ = event_tx.try_send(AppEvent::PermissionRequested(PermissionRequest {
-                id: request_clone.id,
-                permission: request_clone.permission,
-                patterns: request_clone.patterns,
-                always: request_clone.always,
-                metadata: request_clone.metadata,
-            }));
-        });
-
-        response_rx
-    });
+    // Create TUI permission handler using shared implementation
+    let permission_handler = crate::permission_state::create_tui_permission_handler(event_tx.clone());
 
     let tool_ctx = Arc::new(
         ToolContext::new("", "", "tui")
