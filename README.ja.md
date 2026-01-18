@@ -195,6 +195,59 @@ opencode session delete <session-id>
 - `OPENCODE_THEME`: テーマを上書き（dark/light）
 - `OPENCODE_LOG_LEVEL`: ログレベルを設定（debug/info/warn/error）
 
+## スラッシュコマンド
+
+opencode-rsは、TypeScript版と互換性のあるスラッシュコマンド機能をサポートしています。`.opencode/command/`ディレクトリにマークダウンファイルを配置することで、カスタムコマンドを定義できます。
+
+### コマンドの定義
+
+`.opencode/command/`ディレクトリにマークダウンファイルを作成します：
+
+```markdown
+---
+description: git commit and push
+model: opencode/glm-4.6
+subtask: true
+---
+
+commit and push
+
+make sure it includes a prefix like docs:, tui:, core:, ci:
+
+prefer to explain WHY something was done from an end user perspective
+```
+
+### テンプレート変数
+
+コマンドテンプレートでは以下の変数が使用できます：
+
+- **$1, $2, $3, ...**: 位置引数（最後のプレースホルダーは残りの全引数を受け取ります）
+- **$ARGUMENTS**: すべての引数を空白で結合したもの
+- **!`command`**: シェルコマンドを実行して出力を置換
+- **@filepath**: ファイル参照（将来の実装でファイル内容を含める）
+
+### 使用例
+
+```bash
+# コマンドの実行
+/commit
+
+# 引数付きコマンド
+/explain Rust ownership
+
+# テンプレート変数の展開
+# テンプレート: "Explain $1 in $2"
+/explain async/await "Rust programming"
+# → "Explain async/await in Rust programming"
+```
+
+### Frontmatterオプション
+
+- **description**: コマンドの説明（ヘルプに表示されます）
+- **model**: このコマンド専用のモデルを指定
+- **agent**: このコマンド専用のエージェントを指定
+- **subtask**: サブタスクとして実行するかどうか（true/false）
+
 ## 利用可能なツール
 
 opencode-rsには、AIが使用できる組み込みツールが含まれています：

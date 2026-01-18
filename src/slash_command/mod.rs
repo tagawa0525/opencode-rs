@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod builtin;
+pub mod loader;
+pub mod markdown;
 pub mod parser;
 pub mod registry;
 pub mod template;

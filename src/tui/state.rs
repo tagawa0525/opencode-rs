@@ -368,6 +368,19 @@ impl App {
                 self.command_registry.register(Arc::new(template_cmd)).await;
             }
         }
+
+        // Load commands from markdown files
+        match crate::slash_command::loader::load_all_commands().await {
+            Ok(commands) => {
+                for cmd in commands {
+                    tracing::info!("Registering command from markdown: {}", cmd.name());
+                    self.command_registry.register(cmd).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load commands from markdown files: {}", e);
+            }
+        }
     }
 }
 
