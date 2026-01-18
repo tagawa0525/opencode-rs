@@ -7,6 +7,7 @@ pub mod config;
 pub mod id;
 pub mod oauth;
 pub mod permission;
+pub mod permission_state;
 pub mod provider;
 pub mod session;
 pub mod slash_command;
