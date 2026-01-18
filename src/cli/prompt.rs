@@ -503,36 +503,17 @@ async fn handle_tool_calls(
         }
     }
 
-    // Check permissions for each tool call
-    let approved_calls = check_tool_permissions(ctx, &result.pending_calls).await?;
-
-    if approved_calls.is_empty() {
-        if ctx.format == "text" {
-            eprintln!("[No tools approved - stopping execution]");
-        }
-
-        // Add assistant message with tool calls but don't execute them
-        for call in &result.pending_calls {
-            let args: serde_json::Value =
-                serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
-
-            assistant_parts.push(ContentPart::ToolUse {
-                id: call.id.clone(),
-                name: call.name.clone(),
-                input: args,
-            });
-        }
-
-        messages.push(ChatMessage {
-            role: "assistant".to_string(),
-            content: build_chat_content(assistant_parts),
-        });
-
-        return Ok(false);
+    // Execute all tools - permission checks happen inside tool execution
+    // via the ToolContext's permission_handler
+    if ctx.format == "text" {
+        eprintln!(
+            "[Executing {} tool(s) in parallel...]",
+            result.pending_calls.len()
+        );
     }
 
-    // Add tool use parts to assistant message (only approved ones)
-    for call in &approved_calls {
+    // Add tool use parts to assistant message
+    for call in &result.pending_calls {
         let args: serde_json::Value =
             serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
 
@@ -549,8 +530,8 @@ async fn handle_tool_calls(
         content: build_chat_content(assistant_parts),
     });
 
-    // Execute tools
-    let tool_results = execute_tools(ctx, approved_calls).await;
+    // Execute tools (permission checks happen inside via ToolContext)
+    let tool_results = execute_tools(ctx, result.pending_calls).await;
 
     // Add tool results to conversation
     let tool_result_msg = tool::build_tool_result_message(tool_results);
@@ -590,42 +571,13 @@ async fn handle_doom_loop(ctx: &PromptContext, tool_name: &str, args: &str) -> R
     Ok(true)
 }
 
-/// Check permissions for tool calls
-async fn check_tool_permissions(
-    ctx: &PromptContext,
-    calls: &[PendingToolCall],
-) -> Result<Vec<PendingToolCall>> {
-    let mut approved_calls = Vec::new();
-
-    for call in calls {
-        let allowed = ctx
-            .permission_checker
-            .check_and_ask_cli(&call.name, &call.arguments)
-            .await?;
-
-        if allowed {
-            approved_calls.push(call.clone());
-        } else {
-            eprintln!("[User denied execution of tool: {}]", call.name);
-        }
-    }
-
-    Ok(approved_calls)
-}
-
-/// Execute approved tools
-async fn execute_tools(
-    ctx: &PromptContext,
-    approved_calls: Vec<PendingToolCall>,
-) -> Vec<ContentPart> {
+/// Execute tools using ToolContext (which handles permissions internally)
+async fn execute_tools(ctx: &PromptContext, calls: Vec<PendingToolCall>) -> Vec<ContentPart> {
     if ctx.format == "text" {
-        eprintln!(
-            "[Executing {} tool(s) in parallel...]",
-            approved_calls.len()
-        );
+        eprintln!("[Executing {} tool(s) in parallel...]", calls.len());
     }
 
-    let tool_results = tool::execute_all_tools_parallel(approved_calls, &ctx.tool_ctx).await;
+    let tool_results = tool::execute_all_tools_parallel(calls, &ctx.tool_ctx).await;
 
     // Show tool results in text format
     if ctx.format == "text" {

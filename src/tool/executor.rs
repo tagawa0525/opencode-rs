@@ -105,6 +105,12 @@ pub async fn execute_all_tools(
 ///   - When task 1 finishes, task 11 starts immediately
 ///   - When task 2 finishes, task 12 starts immediately
 ///   - And so on until all 48 are complete
+///
+/// The permission system handles grouped approvals automatically:
+/// - When user approves with Session/Workspace/Global scope, the rule is saved
+/// - The permission_state module auto-approves all pending requests that match
+/// - This means only the FIRST call in a group asks for permission
+/// - Remaining calls are auto-approved if they match the saved rule
 pub async fn execute_all_tools_parallel(
     pending_calls: Vec<PendingToolCall>,
     ctx: &ToolContext,
