@@ -27,10 +27,11 @@ pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dy
         tracing::debug!("Loading commands from: {:?}", dir);
 
         // Walk through directory recursively
-        for entry in WalkDir::new(&dir)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
+    for entry in WalkDir::new(&dir)
+        .follow_links(true)
+        .max_depth(10) // Prevent infinite recursion from symlink loops
+        .into_iter()
+        .filter_map(|e| e.ok())
         {
             let path = entry.path();
 
@@ -94,9 +95,11 @@ fn calculate_command_name(relative_path: &Path) -> Result<String> {
     let mut parts = Vec::new();
 
     for component in relative_path.components() {
-        if let Some(s) = component.as_os_str().to_str() {
-            parts.push(s);
-        }
+        let s = component
+            .as_os_str()
+            .to_str()
+            .context("Path contains non-UTF-8 characters")?;
+        parts.push(s);
     }
 
     // Join with / and remove .md extension

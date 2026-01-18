@@ -47,14 +47,17 @@ pub fn parse_markdown(content: &str) -> Result<MarkdownFile> {
         });
     }
 
-    // Find the closing frontmatter delimiter
+    // Find the closing frontmatter delimiter (handle both LF and CRLF line endings)
     let after_opening = &content[3..]; // Skip opening "---"
-    let closing_pos = after_opening
+    
+    let (closing_pos, delimiter_len) = after_opening
         .find("\n---")
+        .map(|pos| (pos, 4))
+        .or_else(|| after_opening.find("\r\n---").map(|pos| (pos, 5)))
         .context("Frontmatter not properly closed with '---'")?;
 
     let frontmatter_str = &after_opening[..closing_pos];
-    let remaining = &after_opening[closing_pos + 4..]; // Skip "\n---"
+    let remaining = &after_opening[closing_pos + delimiter_len..];
 
     // Parse YAML frontmatter
     let frontmatter = parse_frontmatter(frontmatter_str)?;
