@@ -128,98 +128,8 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
     // Create permission checker
     let permission_checker = PermissionChecker::from_config(&config);
 
-    // Create CLI permission handler
-    let permission_handler: tool::PermissionHandler = std::sync::Arc::new(move |request| {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-        // Spawn async task to check approved rules and handle the request
-        let request_clone = request.clone();
-        tokio::spawn(async move {
-            // 1. Check if this request matches any approved rules
-            if crate::permission_state::check_auto_approve(&request_clone).await {
-                // Auto-approved - respond immediately
-                let _ = response_tx.send(tool::PermissionResponse {
-                    id: request_clone.id.clone(),
-                    allow: true,
-                    scope: tool::PermissionScope::Session,
-                });
-                return;
-            }
-
-            // 2. Not approved - need to ask the user
-            // Store response channel for later use
-            crate::permission_state::store_response_channel(request_clone.id.clone(), response_tx)
-                .await;
-
-            // Store pending request for potential auto-approval
-            crate::permission_state::store_pending_request(
-                crate::permission_state::PermissionRequestInfo {
-                    id: request_clone.id.clone(),
-                    permission: request_clone.permission.clone(),
-                    patterns: request_clone.patterns.clone(),
-                    always: request_clone.always.clone(),
-                    metadata: request_clone.metadata.clone(),
-                },
-            )
-            .await;
-
-            // 3. Ask user in blocking thread and send result back to async context
-            let request_for_blocking = request_clone.clone();
-            let (user_response_tx, user_response_rx) = tokio::sync::oneshot::channel();
-            
-            tokio::task::spawn_blocking(move || {
-                use std::io::{self, Write};
-
-                eprintln!("\n[Permission Required]");
-                eprintln!("Tool: {}", request_for_blocking.permission);
-                eprintln!("Patterns: {:?}", request_for_blocking.patterns);
-                eprintln!(
-                    "Action: Execute with arguments: {}",
-                    serde_json::to_string(&request_for_blocking.metadata).unwrap_or_default()
-                );
-                eprintln!();
-                eprintln!("Options:");
-                eprintln!("  y/yes      - Allow once (this request only)");
-                eprintln!("  s/session  - Allow for this session (until program restarts)");
-                eprintln!("  w/workspace- Allow for this workspace (saved to .opencode/)");
-                eprintln!("  g/global   - Allow globally for this user");
-                eprintln!("  n/no       - Deny this request");
-                eprint!("\nChoice [Y/s/w/g/n]: ");
-                let _ = io::stderr().flush();
-
-                let mut input = String::new();
-                let _ = io::stdin().read_line(&mut input);
-
-                let answer = input.trim().to_lowercase();
-
-                // Parse the response
-                let (allow, scope) = if answer.is_empty() || answer == "y" || answer == "yes" {
-                    (true, tool::PermissionScope::Once)
-                } else if answer == "s" || answer == "session" {
-                    (true, tool::PermissionScope::Session)
-                } else if answer == "w" || answer == "workspace" {
-                    (true, tool::PermissionScope::Workspace)
-                } else if answer == "g" || answer == "global" {
-                    (true, tool::PermissionScope::Global)
-                } else {
-                    // "n", "no", or anything else = deny
-                    (false, tool::PermissionScope::Once)
-                };
-
-                // Send user response back to async context via channel
-                let _ = user_response_tx.send((request_for_blocking.id, allow, scope));
-            });
-            
-            // 4. Wait for user response and then send permission response
-            tokio::spawn(async move {
-                if let Ok((id, allow, scope)) = user_response_rx.await {
-                    crate::permission_state::send_permission_response(id, allow, scope).await;
-                }
-            });
-        });
-
-        response_rx
-    });
+    // Create CLI permission handler using shared implementation
+    let permission_handler = crate::permission_state::create_cli_permission_handler();
 
     // Create tool context
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
@@ -478,64 +388,30 @@ async fn handle_tool_calls(
     mut assistant_parts: Vec<ContentPart>,
     doom_detector: &mut DoomLoopDetector,
 ) -> Result<bool> {
-    // Check for doom loop
     doom_detector.add_calls(&result.pending_calls);
 
+    // Check for doom loop
     if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
         if !handle_doom_loop(ctx, &tool_name, &args).await? {
-            // User declined doom loop continuation
-            // Add assistant message with tool calls but don't execute them
-            for call in &result.pending_calls {
-                let args: serde_json::Value =
-                    serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
-
-                assistant_parts.push(ContentPart::ToolUse {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    input: args,
-                });
-            }
-
+            // User declined doom loop continuation - add message without executing
+            assistant_parts.extend(pending_calls_to_parts(&result.pending_calls));
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: build_chat_content(assistant_parts),
             });
-
             return Ok(false);
         }
     }
 
-    // Execute all tools - permission checks happen inside tool execution
-    // via the ToolContext's permission_handler
-    if ctx.format == "text" {
-        eprintln!(
-            "[Executing {} tool(s) in parallel...]",
-            result.pending_calls.len()
-        );
-    }
-
     // Add tool use parts to assistant message
-    for call in &result.pending_calls {
-        let args: serde_json::Value =
-            serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
-
-        assistant_parts.push(ContentPart::ToolUse {
-            id: call.id.clone(),
-            name: call.name.clone(),
-            input: args,
-        });
-    }
-
-    // Add assistant message with tool calls
+    assistant_parts.extend(pending_calls_to_parts(&result.pending_calls));
     messages.push(ChatMessage {
         role: "assistant".to_string(),
         content: build_chat_content(assistant_parts),
     });
 
-    // Execute tools (permission checks happen inside via ToolContext)
+    // Execute tools
     let tool_results = execute_tools(ctx, result.pending_calls).await;
-
-    // Add tool results to conversation
     let tool_result_msg = tool::build_tool_result_message(tool_results);
 
     if ctx.format == "text" {
@@ -543,8 +419,6 @@ async fn handle_tool_calls(
     }
 
     messages.push(tool_result_msg);
-
-    // Continue the loop
     Ok(true)
 }
 
@@ -593,33 +467,32 @@ async fn execute_tools(ctx: &PromptContext, calls: Vec<PendingToolCall>) -> Vec<
 /// Print tool results to console
 fn print_tool_results(results: &[ContentPart]) {
     for result in results {
-        if let ContentPart::ToolResult {
+        let ContentPart::ToolResult {
             tool_use_id,
             content,
             is_error,
         } = result
-        {
-            let status = if is_error.unwrap_or(false) {
-                "ERROR"
-            } else {
-                "OK"
-            };
-            eprintln!("[Tool {} result: {}]", tool_use_id, status);
+        else {
+            continue;
+        };
 
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
-                if let Some(title) = parsed.get("title") {
-                    if let Some(title_str) = title.as_str() {
-                        eprintln!("  Title: {}", title_str);
-                    }
-                }
-                if let Some(output) = parsed.get("output") {
-                    if let Some(output_str) = output.as_str() {
-                        // Use char-boundary-safe truncation
-                        let preview = truncate_str_safe(output_str, 200);
-                        eprintln!("  Output: {}", preview);
-                    }
-                }
-            }
+        let status = if is_error.unwrap_or(false) {
+            "ERROR"
+        } else {
+            "OK"
+        };
+        eprintln!("[Tool {} result: {}]", tool_use_id, status);
+
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) else {
+            continue;
+        };
+
+        if let Some(title_str) = parsed.get("title").and_then(|v| v.as_str()) {
+            eprintln!("  Title: {}", title_str);
+        }
+        if let Some(output_str) = parsed.get("output").and_then(|v| v.as_str()) {
+            let preview = truncate_str_safe(output_str, 200);
+            eprintln!("  Output: {}", preview);
         }
     }
 }
@@ -633,6 +506,22 @@ fn truncate_str_safe(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars).collect();
         format!("{}...", truncated)
     }
+}
+
+/// Convert pending tool calls to ContentPart::ToolUse
+fn pending_calls_to_parts(calls: &[PendingToolCall]) -> Vec<ContentPart> {
+    calls
+        .iter()
+        .map(|call| {
+            let args: serde_json::Value =
+                serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+            ContentPart::ToolUse {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: args,
+            }
+        })
+        .collect()
 }
 
 /// Build ChatContent from parts

@@ -13,6 +13,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+/// Parser state for JSONC comment stripping
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsoncParseState {
+    /// Normal JSON content
+    Normal,
+    /// Inside a double-quoted string
+    InString,
+    /// Inside a line comment (// ...)
+    LineComment,
+    /// Inside a block comment (/* ... */)
+    BlockComment,
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -407,69 +420,67 @@ impl Config {
     /// Strip comments from JSONC content
     fn strip_jsonc_comments(content: &str) -> String {
         let mut result = String::new();
-        let mut in_string = false;
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
+        let mut state = JsoncParseState::Normal;
         let mut chars = content.chars().peekable();
 
         while let Some(c) = chars.next() {
-            if in_line_comment {
-                if c == '\n' {
-                    in_line_comment = false;
+            match state {
+                JsoncParseState::LineComment => {
+                    if c == '\n' {
+                        state = JsoncParseState::Normal;
+                        result.push(c);
+                    }
+                    // Skip other characters in line comment
+                }
+                JsoncParseState::BlockComment => {
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        state = JsoncParseState::Normal;
+                    }
+                    // Skip characters in block comment
+                }
+                JsoncParseState::InString => {
                     result.push(c);
-                }
-                continue;
-            }
-
-            if in_block_comment {
-                if c == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    in_block_comment = false;
-                }
-                continue;
-            }
-
-            if c == '"' && !in_string {
-                in_string = true;
-                result.push(c);
-                continue;
-            }
-
-            if c == '"' && in_string {
-                // Check for escape
-                let mut backslash_count = 0;
-                for ch in result.chars().rev() {
-                    if ch == '\\' {
-                        backslash_count += 1;
-                    } else {
-                        break;
+                    if c == '"' && !Self::is_escaped(&result) {
+                        state = JsoncParseState::Normal;
                     }
                 }
-                if backslash_count % 2 == 0 {
-                    in_string = false;
+                JsoncParseState::Normal => {
+                    if c == '"' {
+                        state = JsoncParseState::InString;
+                        result.push(c);
+                    } else if c == '/' {
+                        match chars.peek() {
+                            Some('/') => {
+                                chars.next();
+                                state = JsoncParseState::LineComment;
+                            }
+                            Some('*') => {
+                                chars.next();
+                                state = JsoncParseState::BlockComment;
+                            }
+                            _ => result.push(c),
+                        }
+                    } else {
+                        result.push(c);
+                    }
                 }
-                result.push(c);
-                continue;
             }
-
-            if !in_string {
-                if c == '/' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    in_line_comment = true;
-                    continue;
-                }
-
-                if c == '/' && chars.peek() == Some(&'*') {
-                    chars.next();
-                    in_block_comment = true;
-                    continue;
-                }
-            }
-
-            result.push(c);
         }
 
         result
+    }
+
+    /// Check if the last character before current position is escaped
+    fn is_escaped(result: &str) -> bool {
+        result
+            .chars()
+            .rev()
+            .skip(1) // Skip the quote itself
+            .take_while(|&ch| ch == '\\')
+            .count()
+            % 2
+            == 1
     }
 
     /// Strip trailing commas from JSON (common in JSONC)
@@ -490,87 +501,50 @@ impl Config {
 
     /// Merge another config into this one (other takes precedence)
     pub fn merge(mut self, other: Config) -> Self {
-        if other.schema.is_some() {
-            self.schema = other.schema;
-        }
-        if other.theme.is_some() {
-            self.theme = other.theme;
-        }
-        if other.model.is_some() {
-            self.model = other.model;
-        }
-        if other.small_model.is_some() {
-            self.small_model = other.small_model;
-        }
-        if other.default_agent.is_some() {
-            self.default_agent = other.default_agent;
-        }
-        if other.username.is_some() {
-            self.username = other.username;
-        }
-        if other.log_level.is_some() {
-            self.log_level = other.log_level;
-        }
-        if other.disabled_providers.is_some() {
-            self.disabled_providers = other.disabled_providers;
-        }
-        if other.enabled_providers.is_some() {
-            self.enabled_providers = other.enabled_providers;
-        }
-        if other.share.is_some() {
-            self.share = other.share;
-        }
-        if other.autoupdate.is_some() {
-            self.autoupdate = other.autoupdate;
+        // Helper to merge Option fields (other takes precedence)
+        fn merge_option<T>(target: &mut Option<T>, source: Option<T>) {
+            if source.is_some() {
+                *target = source;
+            }
         }
 
-        // Merge maps
-        if let Some(other_providers) = other.provider {
-            let providers = self.provider.get_or_insert_with(HashMap::new);
-            providers.extend(other_providers);
-        }
-        if let Some(other_mcp) = other.mcp {
-            let mcp = self.mcp.get_or_insert_with(HashMap::new);
-            mcp.extend(other_mcp);
-        }
-        if let Some(other_agents) = other.agent {
-            let agents = self.agent.get_or_insert_with(HashMap::new);
-            agents.extend(other_agents);
-        }
-        if let Some(other_commands) = other.command {
-            let commands = self.command.get_or_insert_with(HashMap::new);
-            commands.extend(other_commands);
-        }
-        if let Some(other_permissions) = other.permission {
-            let permissions = self.permission.get_or_insert_with(HashMap::new);
-            permissions.extend(other_permissions);
+        // Helper to merge HashMap fields
+        fn merge_map<K: Eq + std::hash::Hash, V>(
+            target: &mut Option<HashMap<K, V>>,
+            source: Option<HashMap<K, V>>,
+        ) {
+            if let Some(source_map) = source {
+                target.get_or_insert_with(HashMap::new).extend(source_map);
+            }
         }
 
-        if other.keybinds.is_some() {
-            self.keybinds = other.keybinds;
-        }
-        if other.tui.is_some() {
-            self.tui = other.tui;
-        }
-        if other.server.is_some() {
-            self.server = other.server;
-        }
-        if other.compaction.is_some() {
-            self.compaction = other.compaction;
-        }
-        if other.instructions.is_some() {
-            self.instructions = other.instructions;
-        }
-        if other.plugin.is_some() {
-            self.plugin = other.plugin;
-        }
-        if let Some(other_tools) = other.tools {
-            let tools = self.tools.get_or_insert_with(HashMap::new);
-            tools.extend(other_tools);
-        }
-        if other.experimental.is_some() {
-            self.experimental = other.experimental;
-        }
+        // Merge simple Option fields
+        merge_option(&mut self.schema, other.schema);
+        merge_option(&mut self.theme, other.theme);
+        merge_option(&mut self.model, other.model);
+        merge_option(&mut self.small_model, other.small_model);
+        merge_option(&mut self.default_agent, other.default_agent);
+        merge_option(&mut self.username, other.username);
+        merge_option(&mut self.log_level, other.log_level);
+        merge_option(&mut self.disabled_providers, other.disabled_providers);
+        merge_option(&mut self.enabled_providers, other.enabled_providers);
+        merge_option(&mut self.share, other.share);
+        merge_option(&mut self.autoupdate, other.autoupdate);
+        merge_option(&mut self.keybinds, other.keybinds);
+        merge_option(&mut self.tui, other.tui);
+        merge_option(&mut self.server, other.server);
+        merge_option(&mut self.compaction, other.compaction);
+        merge_option(&mut self.instructions, other.instructions);
+        merge_option(&mut self.plugin, other.plugin);
+        merge_option(&mut self.experimental, other.experimental);
+
+        // Merge HashMap fields
+        merge_map(&mut self.provider, other.provider);
+        merge_map(&mut self.mcp, other.mcp);
+        merge_map(&mut self.agent, other.agent);
+        merge_map(&mut self.command, other.command);
+        merge_map(&mut self.permission, other.permission);
+        merge_map(&mut self.tools, other.tools);
 
         self
     }
