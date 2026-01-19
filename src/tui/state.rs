@@ -69,6 +69,12 @@ pub struct App {
     pub show_tool_details: bool,
     /// Show assistant metadata (model, agent, etc)
     pub show_assistant_metadata: bool,
+    /// Message history for undo/redo
+    pub message_history: Vec<Vec<DisplayMessage>>,
+    /// Current position in history
+    pub history_position: usize,
+    /// Maximum history entries
+    pub max_history: usize,
 }
 
 impl Default for App {
@@ -99,6 +105,9 @@ impl Default for App {
             show_thinking: true,
             show_tool_details: true,
             show_assistant_metadata: true,
+            message_history: Vec::new(),
+            history_position: 0,
+            max_history: 50,
         }
     }
 }
@@ -177,6 +186,52 @@ impl App {
         app.init_commands(&config).await;
 
         Ok(app)
+    }
+
+    /// Save current message state to history for undo/redo
+    pub fn save_history_snapshot(&mut self) {
+        // Truncate history after current position (creating new branch)
+        self.message_history.truncate(self.history_position);
+
+        // Save current messages
+        self.message_history.push(self.messages.clone());
+
+        // Limit history size
+        if self.message_history.len() > self.max_history {
+            self.message_history.remove(0);
+        } else {
+            self.history_position += 1;
+        }
+    }
+
+    /// Check if undo is possible
+    pub fn can_undo(&self) -> bool {
+        self.history_position > 0 && !self.message_history.is_empty()
+    }
+
+    /// Check if redo is possible
+    pub fn can_redo(&self) -> bool {
+        self.history_position < self.message_history.len()
+    }
+
+    /// Undo to previous message state
+    pub fn undo(&mut self) {
+        if self.can_undo() {
+            self.history_position -= 1;
+            if let Some(messages) = self.message_history.get(self.history_position) {
+                self.messages = messages.clone();
+            }
+        }
+    }
+
+    /// Redo to next message state
+    pub fn redo(&mut self) {
+        if self.can_redo() {
+            if let Some(messages) = self.message_history.get(self.history_position) {
+                self.messages = messages.clone();
+                self.history_position += 1;
+            }
+        }
     }
 
     /// Check if a model is configured and ready to use
