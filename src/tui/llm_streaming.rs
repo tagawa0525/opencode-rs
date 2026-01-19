@@ -134,7 +134,8 @@ async fn initialize_stream_context(
         .unwrap_or_else(|| ".".to_string());
 
     // Create TUI permission handler using shared implementation
-    let permission_handler = crate::permission_state::create_tui_permission_handler(event_tx.clone());
+    let permission_handler =
+        crate::permission_state::create_tui_permission_handler(event_tx.clone());
 
     let tool_ctx = Arc::new(
         ToolContext::new("", "", "tui")
@@ -465,16 +466,10 @@ fn handle_final_response(
     result: StreamResult,
     assistant_parts: Vec<ContentPart>,
 ) -> Result<bool> {
-    let content = if assistant_parts.len() == 1 {
-        if let ContentPart::Text { text } = &assistant_parts[0] {
-            ChatContent::Text(text.clone())
-        } else {
-            ChatContent::Parts(assistant_parts)
-        }
-    } else if !assistant_parts.is_empty() {
-        ChatContent::Parts(assistant_parts)
-    } else {
+    let content = if assistant_parts.is_empty() {
         ChatContent::Text(String::new())
+    } else {
+        build_chat_content(assistant_parts)
     };
 
     messages.push(ChatMessage {
@@ -482,12 +477,13 @@ fn handle_final_response(
         content,
     });
 
-    // Check finish reason
-    let should_stop = result.finish_reason == "stop"
-        || result.finish_reason == "end_turn"
-        || result.finish_reason == "length";
+    let should_continue = !is_terminal_finish_reason(&result.finish_reason);
+    Ok(should_continue)
+}
 
-    Ok(!should_stop)
+/// Check if finish reason indicates stream should stop
+fn is_terminal_finish_reason(reason: &str) -> bool {
+    matches!(reason, "stop" | "end_turn" | "length")
 }
 
 /// Stream a response from the LLM (simple, non-agentic)
@@ -496,6 +492,31 @@ pub async fn stream_response(
     model_id: &str,
     prompt: &str,
 ) -> Result<mpsc::Receiver<StreamEvent>> {
+    let (api_key, model) = get_provider_credentials(provider_id, model_id).await?;
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: ChatContent::Text(prompt.to_string()),
+    }];
+
+    let tool_defs = get_tool_definitions().await;
+    let system_prompt = generate_system_prompt(provider_id, model_id);
+
+    let client = StreamingClient::new();
+    dispatch_stream(
+        &client,
+        provider_id,
+        &api_key,
+        &model,
+        messages,
+        system_prompt,
+        tool_defs,
+    )
+    .await
+}
+
+/// Get provider credentials (API key and model)
+async fn get_provider_credentials(provider_id: &str, model_id: &str) -> Result<(String, Model)> {
     let provider = provider::registry()
         .get(provider_id)
         .await
@@ -504,41 +525,54 @@ pub async fn stream_response(
     let model = provider
         .models
         .get(model_id)
-        .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?
+        .clone();
 
     let api_key = provider
         .key
         .ok_or_else(|| anyhow::anyhow!("No API key for provider: {}", provider_id))?;
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: ChatContent::Text(prompt.to_string()),
-    }];
+    Ok((api_key, model))
+}
 
-    let tools = tool::registry().definitions().await;
-    let tool_defs: Vec<ToolDefinition> = tools
+/// Get tool definitions from registry
+async fn get_tool_definitions() -> Vec<ToolDefinition> {
+    tool::registry()
+        .definitions()
+        .await
         .into_iter()
         .map(|t| ToolDefinition {
             name: t.name,
             description: t.description,
             input_schema: t.parameters,
         })
-        .collect();
+        .collect()
+}
 
-    // Generate system prompt
+/// Generate system prompt for current working directory
+fn generate_system_prompt(provider_id: &str, model_id: &str) -> String {
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| ".".to_string());
-    let system_prompt = crate::session::system::generate(&cwd, provider_id, model_id);
+    crate::session::system::generate(&cwd, provider_id, model_id)
+}
 
-    let client = StreamingClient::new();
-
+/// Dispatch stream request to appropriate provider
+async fn dispatch_stream(
+    client: &StreamingClient,
+    provider_id: &str,
+    api_key: &str,
+    model: &Model,
+    messages: Vec<ChatMessage>,
+    system_prompt: String,
+    tool_defs: Vec<ToolDefinition>,
+) -> Result<mpsc::Receiver<StreamEvent>> {
     match provider_id {
         "anthropic" => {
             client
                 .stream_anthropic(
-                    &api_key,
+                    api_key,
                     &model.api.id,
                     messages,
                     Some(system_prompt),
@@ -555,7 +589,7 @@ pub async fn stream_response(
                 .unwrap_or("https://api.openai.com/v1");
             client
                 .stream_openai(
-                    &api_key,
+                    api_key,
                     base_url,
                     &model.api.id,
                     messages,
@@ -568,7 +602,7 @@ pub async fn stream_response(
         "copilot" => {
             client
                 .stream_copilot(
-                    &api_key,
+                    api_key,
                     &model.api.id,
                     messages,
                     Some(system_prompt),

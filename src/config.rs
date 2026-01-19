@@ -13,6 +13,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+/// Parser state for JSONC comment stripping
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsoncParseState {
+    /// Normal JSON content
+    Normal,
+    /// Inside a double-quoted string
+    InString,
+    /// Inside a line comment (// ...)
+    LineComment,
+    /// Inside a block comment (/* ... */)
+    BlockComment,
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -407,69 +420,67 @@ impl Config {
     /// Strip comments from JSONC content
     fn strip_jsonc_comments(content: &str) -> String {
         let mut result = String::new();
-        let mut in_string = false;
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
+        let mut state = JsoncParseState::Normal;
         let mut chars = content.chars().peekable();
 
         while let Some(c) = chars.next() {
-            if in_line_comment {
-                if c == '\n' {
-                    in_line_comment = false;
+            match state {
+                JsoncParseState::LineComment => {
+                    if c == '\n' {
+                        state = JsoncParseState::Normal;
+                        result.push(c);
+                    }
+                    // Skip other characters in line comment
+                }
+                JsoncParseState::BlockComment => {
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        state = JsoncParseState::Normal;
+                    }
+                    // Skip characters in block comment
+                }
+                JsoncParseState::InString => {
                     result.push(c);
-                }
-                continue;
-            }
-
-            if in_block_comment {
-                if c == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    in_block_comment = false;
-                }
-                continue;
-            }
-
-            if c == '"' && !in_string {
-                in_string = true;
-                result.push(c);
-                continue;
-            }
-
-            if c == '"' && in_string {
-                // Check for escape
-                let mut backslash_count = 0;
-                for ch in result.chars().rev() {
-                    if ch == '\\' {
-                        backslash_count += 1;
-                    } else {
-                        break;
+                    if c == '"' && !Self::is_escaped(&result) {
+                        state = JsoncParseState::Normal;
                     }
                 }
-                if backslash_count % 2 == 0 {
-                    in_string = false;
+                JsoncParseState::Normal => {
+                    if c == '"' {
+                        state = JsoncParseState::InString;
+                        result.push(c);
+                    } else if c == '/' {
+                        match chars.peek() {
+                            Some('/') => {
+                                chars.next();
+                                state = JsoncParseState::LineComment;
+                            }
+                            Some('*') => {
+                                chars.next();
+                                state = JsoncParseState::BlockComment;
+                            }
+                            _ => result.push(c),
+                        }
+                    } else {
+                        result.push(c);
+                    }
                 }
-                result.push(c);
-                continue;
             }
-
-            if !in_string {
-                if c == '/' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    in_line_comment = true;
-                    continue;
-                }
-
-                if c == '/' && chars.peek() == Some(&'*') {
-                    chars.next();
-                    in_block_comment = true;
-                    continue;
-                }
-            }
-
-            result.push(c);
         }
 
         result
+    }
+
+    /// Check if the last character before current position is escaped
+    fn is_escaped(result: &str) -> bool {
+        result
+            .chars()
+            .rev()
+            .skip(1) // Skip the quote itself
+            .take_while(|&ch| ch == '\\')
+            .count()
+            % 2
+            == 1
     }
 
     /// Strip trailing commas from JSON (common in JSONC)

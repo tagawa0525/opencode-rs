@@ -18,36 +18,9 @@ use crate::provider;
 impl App {
     /// Open the model selector dialog
     pub fn open_model_selector(&mut self) {
-        let mut items = Vec::new();
-
-        // Only show models from available providers (with API keys)
-        // By default, hide deprecated models (users can show them with a toggle)
-        for provider in &self.available_providers {
-            for (model_id, model) in &provider.models {
-                // Skip deprecated models by default
-                if matches!(model.status, crate::provider::ModelStatus::Deprecated) {
-                    continue;
-                }
-
-                // Add status indicator to the label
-                let status_badge = match model.status {
-                    crate::provider::ModelStatus::Alpha => " [ALPHA]",
-                    crate::provider::ModelStatus::Beta => " [BETA]",
-                    crate::provider::ModelStatus::Active => "",
-                    crate::provider::ModelStatus::Deprecated => " [DEPRECATED]",
-                };
-
-                items.push(SelectItem {
-                    id: format!("{}/{}", provider.id, model_id),
-                    label: format!("{}{}", model.name, status_badge),
-                    description: Some(format!("{} - {}", provider.name, model_id)),
-                    provider_id: Some(provider.id.clone()),
-                });
-            }
-        }
+        let items = self.collect_available_models();
 
         if items.is_empty() {
-            // No available providers - open provider selector instead
             self.open_provider_selector();
             return;
         }
@@ -58,6 +31,27 @@ impl App {
         )
         .with_items(items);
         self.dialog = Some(dialog);
+    }
+
+    /// Collect available models from providers, excluding deprecated ones
+    fn collect_available_models(&self) -> Vec<SelectItem> {
+        self.available_providers
+            .iter()
+            .flat_map(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .filter(|(_, model)| {
+                        !matches!(model.status, crate::provider::ModelStatus::Deprecated)
+                    })
+                    .map(move |(model_id, model)| SelectItem {
+                        id: format!("{}/{}", provider.id, model_id),
+                        label: format!("{}{}", model.name, model_status_badge(model.status)),
+                        description: Some(format!("{} - {}", provider.name, model_id)),
+                        provider_id: Some(provider.id.clone()),
+                    })
+            })
+            .collect()
     }
 
     /// Open the provider selector dialog
@@ -114,55 +108,29 @@ impl App {
 
     /// Open auth method selector for a provider
     pub fn open_auth_method_selector(&mut self, provider_id: &str) {
-        let mut items = Vec::new();
-
-        match provider_id {
-            "copilot" => {
-                items.push(SelectItem {
-                    id: "oauth".to_string(),
-                    label: "Sign in with GitHub".to_string(),
-                    description: Some("Use your GitHub Copilot subscription".to_string()),
-                    provider_id: Some(provider_id.to_string()),
-                });
-                items.push(SelectItem {
-                    id: "api_key".to_string(),
-                    label: "Enter token manually".to_string(),
-                    description: Some("Enter GITHUB_COPILOT_TOKEN directly".to_string()),
-                    provider_id: Some(provider_id.to_string()),
-                });
-            }
-            "openai" => {
-                items.push(SelectItem {
-                    id: "oauth".to_string(),
-                    label: "Sign in with ChatGPT".to_string(),
-                    description: Some("Use your ChatGPT Plus/Pro subscription".to_string()),
-                    provider_id: Some(provider_id.to_string()),
-                });
-                items.push(SelectItem {
-                    id: "api_key".to_string(),
-                    label: "Enter API key".to_string(),
-                    description: Some("Enter OPENAI_API_KEY directly".to_string()),
-                    provider_id: Some(provider_id.to_string()),
-                });
-            }
-            _ => {
+        let items = match get_auth_method_items(provider_id) {
+            Some(items) => items,
+            None => {
                 // For other providers, go directly to API key input
                 self.open_api_key_input(provider_id);
                 return;
             }
-        }
+        };
 
-        let provider_name = self
-            .all_providers
-            .iter()
-            .find(|p| p.id == provider_id)
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| provider_id.to_string());
-
+        let provider_name = self.get_provider_name(provider_id);
         let dialog = DialogState::new(DialogType::AuthMethodSelector, "Select Auth Method")
             .with_items(items)
             .with_message(&format!("How do you want to connect to {}?", provider_name));
         self.dialog = Some(dialog);
+    }
+
+    /// Get provider name by ID
+    fn get_provider_name(&self, provider_id: &str) -> String {
+        self.all_providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| provider_id.to_string())
     }
 
     /// Start GitHub Copilot OAuth device flow
@@ -455,58 +423,29 @@ async fn handle_permission_input(
         None => return Ok(()),
     };
 
-    match key_code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => {
-            app.close_dialog();
-            let _ = event_tx
-                .send(AppEvent::PermissionResponse {
-                    id,
-                    allow: true,
-                    scope: crate::tool::PermissionScope::Once,
-                })
-                .await;
-        }
+    // Map key to permission response (allow, scope)
+    let response = match key_code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some((true, crate::tool::PermissionScope::Once)),
         KeyCode::Char('s') | KeyCode::Char('S') => {
-            app.close_dialog();
-            let _ = event_tx
-                .send(AppEvent::PermissionResponse {
-                    id,
-                    allow: true,
-                    scope: crate::tool::PermissionScope::Session,
-                })
-                .await;
+            Some((true, crate::tool::PermissionScope::Session))
         }
         KeyCode::Char('w') | KeyCode::Char('W') => {
-            app.close_dialog();
-            let _ = event_tx
-                .send(AppEvent::PermissionResponse {
-                    id,
-                    allow: true,
-                    scope: crate::tool::PermissionScope::Workspace,
-                })
-                .await;
+            Some((true, crate::tool::PermissionScope::Workspace))
         }
         KeyCode::Char('g') | KeyCode::Char('G') => {
-            app.close_dialog();
-            let _ = event_tx
-                .send(AppEvent::PermissionResponse {
-                    id,
-                    allow: true,
-                    scope: crate::tool::PermissionScope::Global,
-                })
-                .await;
+            Some((true, crate::tool::PermissionScope::Global))
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            app.close_dialog();
-            let _ = event_tx
-                .send(AppEvent::PermissionResponse {
-                    id,
-                    allow: false,
-                    scope: crate::tool::PermissionScope::Once,
-                })
-                .await;
+            Some((false, crate::tool::PermissionScope::Once))
         }
-        _ => {}
+        _ => None,
+    };
+
+    if let Some((allow, scope)) = response {
+        app.close_dialog();
+        let _ = event_tx
+            .send(AppEvent::PermissionResponse { id, allow, scope })
+            .await;
     }
     Ok(())
 }
@@ -545,4 +484,48 @@ pub async fn handle_dialog_input(
     }
 
     Ok(())
+}
+
+/// Get status badge text for a model status
+fn model_status_badge(status: crate::provider::ModelStatus) -> &'static str {
+    match status {
+        crate::provider::ModelStatus::Alpha => " [ALPHA]",
+        crate::provider::ModelStatus::Beta => " [BETA]",
+        crate::provider::ModelStatus::Active => "",
+        crate::provider::ModelStatus::Deprecated => " [DEPRECATED]",
+    }
+}
+
+/// Get auth method items for a provider, if OAuth is supported
+fn get_auth_method_items(provider_id: &str) -> Option<Vec<SelectItem>> {
+    let (oauth_label, oauth_desc, key_label, key_desc) = match provider_id {
+        "copilot" => (
+            "Sign in with GitHub",
+            "Use your GitHub Copilot subscription",
+            "Enter token manually",
+            "Enter GITHUB_COPILOT_TOKEN directly",
+        ),
+        "openai" => (
+            "Sign in with ChatGPT",
+            "Use your ChatGPT Plus/Pro subscription",
+            "Enter API key",
+            "Enter OPENAI_API_KEY directly",
+        ),
+        _ => return None,
+    };
+
+    Some(vec![
+        SelectItem {
+            id: "oauth".to_string(),
+            label: oauth_label.to_string(),
+            description: Some(oauth_desc.to_string()),
+            provider_id: Some(provider_id.to_string()),
+        },
+        SelectItem {
+            id: "api_key".to_string(),
+            label: key_label.to_string(),
+            description: Some(key_desc.to_string()),
+            provider_id: Some(provider_id.to_string()),
+        },
+    ])
 }

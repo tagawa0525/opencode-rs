@@ -439,16 +439,15 @@ pub fn create_tui_permission_handler(
             .await;
 
             // Send permission request event to TUI
-            let _ = event_tx
-                .try_send(crate::tui::AppEvent::PermissionRequested(
-                    crate::tui::PermissionRequest {
-                        id: request_clone.id,
-                        permission: request_clone.permission,
-                        patterns: request_clone.patterns,
-                        always: request_clone.always,
-                        metadata: request_clone.metadata,
-                    },
-                ));
+            let _ = event_tx.try_send(crate::tui::AppEvent::PermissionRequested(
+                crate::tui::PermissionRequest {
+                    id: request_clone.id,
+                    permission: request_clone.permission,
+                    patterns: request_clone.patterns,
+                    always: request_clone.always,
+                    metadata: request_clone.metadata,
+                },
+            ));
         });
 
         response_rx
