@@ -80,7 +80,7 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
         CommandAction::Redo => show_not_implemented(app, "Redo (message history needed)"),
         CommandAction::Compact => show_not_implemented(app, "Session compaction"),
         CommandAction::Unshare => show_not_implemented(app, "Session sharing"),
-        CommandAction::Rename => show_not_implemented(app, "Session rename dialog"),
+        CommandAction::Rename => app.open_session_rename(),
         CommandAction::Timeline => show_not_implemented(app, "Timeline dialog"),
         CommandAction::Fork => show_not_implemented(app, "Session forking"),
         CommandAction::Share => show_not_implemented(app, "Session sharing"),

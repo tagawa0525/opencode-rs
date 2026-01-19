@@ -40,6 +40,7 @@ pub enum DialogType {
     OAuthDeviceCode,
     OAuthWaiting,
     PermissionRequest,
+    SessionRename,
 }
 
 /// Autocomplete state for slash commands

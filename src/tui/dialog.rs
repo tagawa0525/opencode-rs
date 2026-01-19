@@ -106,6 +106,15 @@ impl App {
         self.dialog = Some(dialog);
     }
 
+    /// Open session rename dialog
+    pub fn open_session_rename(&mut self) {
+        let current_title = self.session_title.clone();
+        let mut dialog = DialogState::new(DialogType::SessionRename, "Rename Session");
+        dialog.message = Some("Enter a new name for this session".to_string());
+        dialog.input_value = current_title;
+        self.dialog = Some(dialog);
+    }
+
     /// Open auth method selector for a provider
     pub fn open_auth_method_selector(&mut self, provider_id: &str) {
         let items = match get_auth_method_items(provider_id) {
@@ -281,6 +290,59 @@ async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
         }
         _ => {}
     }
+    Ok(())
+}
+
+/// Handle input for session rename dialog
+async fn handle_rename_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => {
+            app.close_dialog();
+        }
+        KeyCode::Enter => {
+            handle_rename_submit(app).await?;
+        }
+        KeyCode::Char(c) => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.input_value.push(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.input_value.pop();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle session rename submission
+async fn handle_rename_submit(app: &mut App) -> Result<()> {
+    let new_title = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        dialog.input_value.trim().to_string()
+    };
+
+    if new_title.is_empty() {
+        return Ok(());
+    }
+
+    // Update session
+    if let Some(session) = &mut app.session {
+        session.title = new_title.clone();
+        let project_id = session.project_id.clone();
+        session.update(&project_id, |s| {
+            s.title = new_title.clone();
+        }).await?;
+        app.session_title = new_title;
+        app.add_message("system", "Session renamed successfully");
+    }
+
+    app.close_dialog();
     Ok(())
 }
 
@@ -464,6 +526,9 @@ pub async fn handle_dialog_input(
         }
         Some(DialogType::ApiKeyInput) => {
             handle_api_key_input(app, key.code).await?;
+        }
+        Some(DialogType::SessionRename) => {
+            handle_rename_input(app, key.code).await?;
         }
         Some(DialogType::AuthMethodSelector) => {
             handle_auth_method_input(app, key.code, &event_tx).await?;
