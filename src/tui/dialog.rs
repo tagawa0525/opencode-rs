@@ -115,6 +115,36 @@ impl App {
         self.dialog = Some(dialog);
     }
 
+    /// Open session list dialog
+    pub async fn open_session_list(&mut self) -> Result<()> {
+        use crate::session::Session;
+
+        let sessions = Session::list("default").await?;
+
+        let items: Vec<SelectItem> = sessions
+            .into_iter()
+            .map(|s| {
+                let created_time = chrono::DateTime::from_timestamp_millis(s.time.created)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                SelectItem {
+                    id: s.id.clone(),
+                    label: s.title.clone(),
+                    description: Some(format!("Created: {} | Slug: {}", created_time, s.slug)),
+                    provider_id: None,
+                }
+            })
+            .collect();
+
+        let dialog = DialogState::new(DialogType::SessionList, "Select Session")
+            .with_items(items)
+            .with_message("Select a session to switch to");
+        self.dialog = Some(dialog);
+
+        Ok(())
+    }
+
     /// Open auth method selector for a provider
     pub fn open_auth_method_selector(&mut self, provider_id: &str) {
         let items = match get_auth_method_items(provider_id) {
@@ -263,6 +293,26 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
             } else {
                 app.open_auth_method_selector(&item_id);
             }
+        }
+        DialogType::SessionList => {
+            use crate::session::Session;
+
+            // Load the selected session
+            if let Ok(Some(session)) = Session::get("default", &item_id).await {
+                // Update app state
+                app.session = Some(session.clone());
+                app.session_title = session.title.clone();
+                app.session_slug = session.slug.clone();
+
+                // Clear messages - they will be loaded on demand
+                app.messages.clear();
+                app.total_cost = 0.0;
+                app.total_tokens = 0;
+
+                app.add_message("system", &format!("Switched to session: {}", session.title));
+            }
+
+            app.close_dialog();
         }
         _ => {}
     }

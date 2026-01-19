@@ -41,6 +41,7 @@ pub enum DialogType {
     OAuthWaiting,
     PermissionRequest,
     SessionRename,
+    SessionList,
 }
 
 /// Autocomplete state for slash commands

@@ -40,7 +40,8 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
     match dialog.dialog_type {
         DialogType::ModelSelector
         | DialogType::ProviderSelector
-        | DialogType::AuthMethodSelector => {
+        | DialogType::AuthMethodSelector
+        | DialogType::SessionList => {
             render_select_dialog(frame, dialog, theme, inner);
         }
         DialogType::ApiKeyInput => {

@@ -75,7 +75,9 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
 
         // Unimplemented actions with messages
         CommandAction::OpenAgentSelector => show_not_implemented(app, "Agent selector"),
-        CommandAction::OpenSessionList => show_not_implemented(app, "Session list"),
+        CommandAction::OpenSessionList => {
+            app.open_session_list().await?;
+        }
         CommandAction::Undo => show_not_implemented(app, "Undo (message history needed)"),
         CommandAction::Redo => show_not_implemented(app, "Redo (message history needed)"),
         CommandAction::Compact => show_not_implemented(app, "Session compaction"),
