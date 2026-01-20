@@ -76,10 +76,11 @@ impl<'a> Widget for MessageWidget<'a> {
         let bg_block = Block::default().style(bg_style);
         bg_block.render(area, buf);
 
-        // Render content
-        let content_lines: Vec<Line> = self
-            .content
+        // Render content (trim to remove leading/trailing whitespace and filter empty lines)
+        let trimmed_content = self.content.trim();
+        let content_lines: Vec<Line> = trimmed_content
             .lines()
+            .filter(|line| !line.trim().is_empty()) // Remove empty lines
             .map(|line| Line::from(Span::styled(format!(" {} ", line), self.theme.text())))
             .collect();
 

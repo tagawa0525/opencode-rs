@@ -125,10 +125,14 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let mut current_y = inner.y;
     let messages_vec: Vec<_> = messages_to_show.iter().rev().collect();
 
-    for msg in messages_vec.iter() {
-        // Calculate height for this message (+1 for spacing after message)
-        let content_lines = msg.content.lines().count();
-        let msg_height = (content_lines + 1).max(2).min(11) as u16;
+    for (idx, msg) in messages_vec.iter().enumerate() {
+        // Calculate height for this message (trim and filter empty lines)
+        let content_lines = msg.content
+            .trim()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        let msg_height = content_lines.max(1).min(10) as u16;
 
         if current_y + msg_height > inner.y + inner.height {
             break;
@@ -146,6 +150,24 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(widget, msg_area);
 
         current_y += msg_height;
+
+        // Check if we need separator after this message
+        // Add separator when role changes (user->assistant or assistant->user)
+        let need_separator = if idx + 1 < messages_vec.len() {
+            let next_msg = messages_vec[idx + 1];
+            msg.role != next_msg.role
+        } else {
+            false // No separator after last message
+        };
+
+        if need_separator && current_y < inner.y + inner.height {
+            let separator_area = Rect::new(inner.x, current_y, inner.width, 1);
+            let separator_line = "─".repeat(inner.width as usize);
+            let separator_para = Paragraph::new(separator_line)
+                .style(app.theme.text_dim());
+            frame.render_widget(separator_para, separator_area);
+            current_y += 1;
+        }
     }
 
     // Show processing indicator after all messages
