@@ -131,6 +131,8 @@ pub struct DialogState {
     pub verification_uri: Option<String>,
     /// For permission requests
     pub permission_request: Option<PermissionRequest>,
+    /// Selected permission option index (0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject)
+    pub selected_permission_option: usize,
 }
 
 impl DialogState {
@@ -148,6 +150,7 @@ impl DialogState {
             user_code: None,
             verification_uri: None,
             permission_request: None,
+            selected_permission_option: 0,
         }
     }
 
@@ -215,6 +218,21 @@ impl DialogState {
     pub fn move_down(&mut self) {
         if self.selected_index + 1 < self.filtered_indices.len() {
             self.selected_index += 1;
+        }
+    }
+
+    /// Move left in permission options
+    pub fn move_permission_left(&mut self) {
+        if self.selected_permission_option > 0 {
+            self.selected_permission_option -= 1;
+        }
+    }
+
+    /// Move right in permission options
+    pub fn move_permission_right(&mut self) {
+        // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
+        if self.selected_permission_option < 4 {
+            self.selected_permission_option += 1;
         }
     }
 }

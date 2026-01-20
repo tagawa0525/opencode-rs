@@ -643,8 +643,26 @@ async fn handle_permission_input(
         None => return Ok(()),
     };
 
-    // Map key to permission response (allow, scope)
+    // Handle arrow key navigation
+    match key_code {
+        KeyCode::Left => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_permission_left();
+            }
+            return Ok(());
+        }
+        KeyCode::Right => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.move_permission_right();
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    // Get the response based on key press or current selection
     let response = match key_code {
+        // Direct key selection
         KeyCode::Char('y') | KeyCode::Char('Y') => Some((true, crate::tool::PermissionScope::Once)),
         KeyCode::Char('s') | KeyCode::Char('S') => {
             Some((true, crate::tool::PermissionScope::Session))
@@ -657,6 +675,22 @@ async fn handle_permission_input(
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             Some((false, crate::tool::PermissionScope::Once))
+        }
+        // Enter key - use current selection
+        KeyCode::Enter => {
+            let selected = app
+                .dialog
+                .as_ref()
+                .map(|d| d.selected_permission_option)
+                .unwrap_or(0);
+            match selected {
+                0 => Some((true, crate::tool::PermissionScope::Once)),
+                1 => Some((true, crate::tool::PermissionScope::Session)),
+                2 => Some((true, crate::tool::PermissionScope::Workspace)),
+                3 => Some((true, crate::tool::PermissionScope::Global)),
+                4 => Some((false, crate::tool::PermissionScope::Once)), // Reject
+                _ => None,
+            }
         }
         _ => None,
     };

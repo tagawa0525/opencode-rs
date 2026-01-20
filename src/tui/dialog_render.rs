@@ -397,44 +397,128 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
             .wrap(Wrap { trim: true });
         frame.render_widget(details, chunks[4]);
 
-        // Options
-        let options = vec![Line::from(vec![
-            Span::styled(
-                "[Y]",
+        // Options with selection highlighting
+        // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
+        let selected = dialog.selected_permission_option;
+
+        let mut option_spans = vec![];
+
+        // Once option
+        option_spans.push(Span::styled(
+            "[Y]",
+            if selected == 0 {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.success)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Once    "),
-            Span::styled(
-                "[S]",
+                    .add_modifier(Modifier::BOLD)
+            },
+        ));
+        option_spans.push(Span::styled(
+            " Once    ",
+            if selected == 0 {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ));
+
+        // Session option
+        option_spans.push(Span::styled(
+            "[S]",
+            if selected == 1 {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Session    "),
-            Span::styled(
-                "[W]",
+                    .add_modifier(Modifier::BOLD)
+            },
+        ));
+        option_spans.push(Span::styled(
+            " Session    ",
+            if selected == 1 {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ));
+
+        // Workspace option
+        option_spans.push(Span::styled(
+            "[W]",
+            if selected == 2 {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Workspace    "),
-            Span::styled(
-                "[G]",
+                    .add_modifier(Modifier::BOLD)
+            },
+        ));
+        option_spans.push(Span::styled(
+            " Workspace    ",
+            if selected == 2 {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ));
+
+        // Global option
+        option_spans.push(Span::styled(
+            "[G]",
+            if selected == 3 {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Global    "),
-            Span::styled(
-                "[N]",
+                    .add_modifier(Modifier::BOLD)
+            },
+        ));
+        option_spans.push(Span::styled(
+            " Global    ",
+            if selected == 3 {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ));
+
+        // Reject option
+        option_spans.push(Span::styled(
+            "[N]",
+            if selected == 4 {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.error)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme.error)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Reject"),
-        ])];
+                    .add_modifier(Modifier::BOLD)
+            },
+        ));
+        option_spans.push(Span::styled(
+            " Reject",
+            if selected == 4 {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ));
+
+        let options = vec![Line::from(option_spans)];
         let options_widget = Paragraph::new(options)
             .alignment(Alignment::Center)
             .style(Style::default().fg(theme.foreground));
@@ -442,9 +526,10 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
     }
 
     // Help text
-    let help =
-        Paragraph::new("Y=Once | S=Session | W=Workspace | G=Global | N=Reject | Esc=Cancel")
-            .style(Style::default().fg(theme.dim))
-            .alignment(Alignment::Center);
+    let help = Paragraph::new(
+        "Left/Right: Navigate | Enter: Confirm | Y/S/W/G/N: Direct select | Esc: Cancel",
+    )
+    .style(Style::default().fg(theme.dim))
+    .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
 }
