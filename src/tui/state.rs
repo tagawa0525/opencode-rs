@@ -69,6 +69,18 @@ pub struct App {
     pub show_tool_details: bool,
     /// Show assistant metadata (model, agent, etc)
     pub show_assistant_metadata: bool,
+    /// Message history for undo/redo
+    pub message_history: Vec<Vec<DisplayMessage>>,
+    /// Current position in history
+    pub history_position: usize,
+    /// Maximum history entries
+    pub max_history: usize,
+    /// Input history (past user messages)
+    pub input_history: Vec<String>,
+    /// Current position in input history (0 = most recent)
+    pub input_history_position: Option<usize>,
+    /// Temporary input buffer when navigating history
+    pub input_history_buffer: String,
 }
 
 impl Default for App {
@@ -99,6 +111,12 @@ impl Default for App {
             show_thinking: true,
             show_tool_details: true,
             show_assistant_metadata: true,
+            message_history: Vec::new(),
+            history_position: 0,
+            max_history: 50,
+            input_history: Vec::new(),
+            input_history_position: None,
+            input_history_buffer: String::new(),
         }
     }
 }
@@ -177,6 +195,125 @@ impl App {
         app.init_commands(&config).await;
 
         Ok(app)
+    }
+
+    /// Save current message state to history for undo/redo
+    pub fn save_history_snapshot(&mut self) {
+        // Truncate history after current position (creating new branch)
+        self.message_history.truncate(self.history_position);
+
+        // Save current messages
+        self.message_history.push(self.messages.clone());
+
+        // Limit history size
+        if self.message_history.len() > self.max_history {
+            self.message_history.remove(0);
+        } else {
+            self.history_position += 1;
+        }
+    }
+
+    /// Check if undo is possible
+    pub fn can_undo(&self) -> bool {
+        self.history_position > 0 && !self.message_history.is_empty()
+    }
+
+    /// Check if redo is possible
+    pub fn can_redo(&self) -> bool {
+        self.history_position < self.message_history.len()
+    }
+
+    /// Undo to previous message state
+    pub fn undo(&mut self) {
+        if self.can_undo() {
+            self.history_position -= 1;
+            if let Some(messages) = self.message_history.get(self.history_position) {
+                self.messages = messages.clone();
+            }
+        }
+    }
+
+    /// Redo to next message state
+    pub fn redo(&mut self) {
+        if self.can_redo() {
+            if let Some(messages) = self.message_history.get(self.history_position) {
+                self.messages = messages.clone();
+                self.history_position += 1;
+            }
+        }
+    }
+
+    /// Add input to history
+    pub fn add_input_to_history(&mut self, input: &str) {
+        // Don't add empty or whitespace-only inputs
+        if input.trim().is_empty() {
+            return;
+        }
+
+        // Don't add if it's the same as the most recent entry
+        if self.input_history.first().map(|s| s.as_str()) == Some(input) {
+            return;
+        }
+
+        // Add to front of history (most recent first)
+        self.input_history.insert(0, input.to_string());
+
+        // Limit history size to 100 entries
+        if self.input_history.len() > 100 {
+            self.input_history.truncate(100);
+        }
+
+        // Reset history position
+        self.input_history_position = None;
+    }
+
+    /// Set input and update cursor position to end
+    fn set_input_and_cursor(&mut self, text: String) {
+        self.cursor_position = text.len();
+        self.input = text;
+    }
+
+    /// Navigate to previous input in history (PageUp)
+    pub fn history_previous(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+
+        let new_pos = match self.input_history_position {
+            None => {
+                // First time navigating history - save current input
+                self.input_history_buffer = self.input.clone();
+                0
+            }
+            Some(pos) if pos + 1 < self.input_history.len() => pos + 1,
+            Some(pos) => pos, // Already at oldest entry
+        };
+
+        self.input_history_position = Some(new_pos);
+
+        if let Some(entry) = self.input_history.get(new_pos).cloned() {
+            self.set_input_and_cursor(entry);
+        }
+    }
+
+    /// Navigate to next input in history (PageDown)
+    pub fn history_next(&mut self) {
+        let Some(pos) = self.input_history_position else {
+            return; // Not in history navigation mode
+        };
+
+        if pos == 0 {
+            // At the most recent entry - restore buffer
+            let buffer = std::mem::take(&mut self.input_history_buffer);
+            self.set_input_and_cursor(buffer);
+            self.input_history_position = None;
+        } else {
+            // Move to newer entry
+            self.input_history_position = Some(pos - 1);
+            if let Some(entry) = self.input_history.get(pos - 1).cloned() {
+                self.set_input_and_cursor(entry);
+            }
+        }
     }
 
     /// Check if a model is configured and ready to use
@@ -259,17 +396,26 @@ impl App {
                 self.input.clear();
                 self.cursor_position = 0;
             }
+            Action::PageUp => {
+                self.history_previous();
+            }
+            Action::PageDown => {
+                self.history_next();
+            }
             _ => {}
         }
     }
 
-    /// Submit the current input
+    /// Submit the current input and reset state
     pub fn take_input(&mut self) -> Option<String> {
         if self.input.trim().is_empty() {
             return None;
         }
+
         let input = std::mem::take(&mut self.input);
         self.cursor_position = 0;
+        self.input_history_position = None;
+        self.input_history_buffer.clear();
         Some(input)
     }
 

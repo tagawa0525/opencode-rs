@@ -106,6 +106,127 @@ impl App {
         self.dialog = Some(dialog);
     }
 
+    /// Open session rename dialog
+    pub fn open_session_rename(&mut self) {
+        let current_title = self.session_title.clone();
+        let mut dialog = DialogState::new(DialogType::SessionRename, "Rename Session");
+        dialog.message = Some("Enter a new name for this session".to_string());
+        dialog.input_value = current_title;
+        self.dialog = Some(dialog);
+    }
+
+    /// Open session list dialog
+    pub async fn open_session_list(&mut self) -> Result<()> {
+        use crate::session::Session;
+
+        let sessions = Session::list("default").await?;
+
+        let items: Vec<SelectItem> = sessions
+            .into_iter()
+            .map(|s| {
+                let created_time = chrono::DateTime::from_timestamp_millis(s.time.created)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                SelectItem {
+                    id: s.id.clone(),
+                    label: s.title.clone(),
+                    description: Some(format!("Created: {} | Slug: {}", created_time, s.slug)),
+                    provider_id: None,
+                }
+            })
+            .collect();
+
+        let dialog = DialogState::new(DialogType::SessionList, "Select Session")
+            .with_items(items)
+            .with_message("Select a session to switch to");
+        self.dialog = Some(dialog);
+
+        Ok(())
+    }
+
+    /// Open agent selector dialog
+    pub async fn open_agent_selector(&mut self) -> Result<()> {
+        // Load config to get agent definitions
+        let config = Config::load().await?;
+
+        let items: Vec<SelectItem> = if let Some(agents) = config.agent {
+            agents
+                .into_iter()
+                .filter(|(_, agent_config)| !agent_config.disable.unwrap_or(false))
+                .filter(|(_, agent_config)| !agent_config.hidden.unwrap_or(false))
+                .map(|(name, agent_config)| SelectItem {
+                    id: name.clone(),
+                    label: name.clone(),
+                    description: agent_config.description.or(agent_config.model),
+                    provider_id: None,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        if items.is_empty() {
+            self.add_message(
+                "system",
+                "No agents configured. Define agents in your opencode.json config file.",
+            );
+            return Ok(());
+        }
+
+        let dialog = DialogState::new(DialogType::AgentSelector, "Select Agent")
+            .with_items(items)
+            .with_message("Select an agent to use");
+        self.dialog = Some(dialog);
+
+        Ok(())
+    }
+
+    /// Open timeline dialog (message history)
+    pub fn open_timeline(&mut self) {
+        let items: Vec<SelectItem> = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(idx, msg)| {
+                let role_display = match msg.role.as_str() {
+                    "user" => "👤 User",
+                    "assistant" => "🤖 Assistant",
+                    "system" => "⚙️  System",
+                    _ => &msg.role,
+                };
+
+                // Get first line of content for preview
+                let preview = msg
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>();
+
+                let preview = if msg.content.len() > 60 {
+                    format!("{}...", preview)
+                } else {
+                    preview
+                };
+
+                SelectItem {
+                    id: idx.to_string(),
+                    label: format!("{}: {}", role_display, preview),
+                    description: Some(format!("Message {}/{}", idx + 1, self.messages.len())),
+                    provider_id: None,
+                }
+            })
+            .collect();
+
+        let dialog = DialogState::new(DialogType::Timeline, "Message Timeline")
+            .with_items(items)
+            .with_message("Select a message to view");
+        self.dialog = Some(dialog);
+    }
+
     /// Open auth method selector for a provider
     pub fn open_auth_method_selector(&mut self, provider_id: &str) {
         let items = match get_auth_method_items(provider_id) {
@@ -255,20 +376,69 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
                 app.open_auth_method_selector(&item_id);
             }
         }
+        DialogType::SessionList => {
+            use crate::session::Session;
+
+            // Load the selected session
+            if let Ok(Some(session)) = Session::get("default", &item_id).await {
+                // Update app state
+                app.session = Some(session.clone());
+                app.session_title = session.title.clone();
+                app.session_slug = session.slug.clone();
+
+                // Clear messages - they will be loaded on demand
+                app.messages.clear();
+                app.total_cost = 0.0;
+                app.total_tokens = 0;
+
+                app.add_message("system", &format!("Switched to session: {}", session.title));
+            }
+
+            app.close_dialog();
+        }
+        DialogType::AgentSelector => {
+            // Switch to the selected agent
+            // TODO: Implement full agent system with prompts and configurations
+            app.status = format!(
+                "Agent switching to '{}' - agent system under development",
+                item_id
+            );
+            app.add_message(
+                "system",
+                &format!(
+                    "Note: Agent '{}' selected, but agent system is not yet fully implemented",
+                    item_id
+                ),
+            );
+            app.close_dialog();
+        }
+        DialogType::Timeline => {
+            // Parse the message index from the item ID
+            if let Ok(msg_index) = item_id.parse::<usize>() {
+                if let Some(msg) = app.messages.get(msg_index) {
+                    // Display the full message content
+                    app.add_message(
+                        "system",
+                        &format!(
+                            "Message {}/{} ({})\n\n{}",
+                            msg_index + 1,
+                            app.messages.len(),
+                            msg.role,
+                            msg.content
+                        ),
+                    );
+                }
+            }
+            app.close_dialog();
+        }
         _ => {}
     }
     Ok(())
 }
 
-/// Handle input for API key input dialog
-async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+/// Handle text input for dialogs (shared logic for API key and rename dialogs)
+fn handle_text_input_key(app: &mut App, key_code: KeyCode) {
     match key_code {
-        KeyCode::Esc => {
-            app.open_provider_selector();
-        }
-        KeyCode::Enter => {
-            handle_api_key_submit(app).await?;
-        }
         KeyCode::Char(c) => {
             if let Some(dialog) = &mut app.dialog {
                 dialog.input_value.push(c);
@@ -281,6 +451,56 @@ async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
         }
         _ => {}
     }
+}
+
+/// Handle input for API key input dialog
+async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => app.open_provider_selector(),
+        KeyCode::Enter => handle_api_key_submit(app).await?,
+        _ => handle_text_input_key(app, key_code),
+    }
+    Ok(())
+}
+
+/// Handle input for session rename dialog
+async fn handle_rename_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => app.close_dialog(),
+        KeyCode::Enter => handle_rename_submit(app).await?,
+        _ => handle_text_input_key(app, key_code),
+    }
+    Ok(())
+}
+
+/// Handle session rename submission
+async fn handle_rename_submit(app: &mut App) -> Result<()> {
+    let new_title = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        dialog.input_value.trim().to_string()
+    };
+
+    if new_title.is_empty() {
+        return Ok(());
+    }
+
+    // Update session
+    if let Some(session) = &mut app.session {
+        session.title = new_title.clone();
+        let project_id = session.project_id.clone();
+        session
+            .update(&project_id, |s| {
+                s.title = new_title.clone();
+            })
+            .await?;
+        app.session_title = new_title;
+        app.add_message("system", "Session renamed successfully");
+    }
+
+    app.close_dialog();
     Ok(())
 }
 
@@ -456,27 +676,36 @@ pub async fn handle_dialog_input(
     key: crossterm::event::KeyEvent,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Result<()> {
-    let dialog_type = app.dialog.as_ref().map(|d| d.dialog_type.clone());
+    let Some(dialog) = &app.dialog else {
+        return Ok(());
+    };
 
-    match dialog_type {
-        Some(DialogType::ModelSelector) | Some(DialogType::ProviderSelector) => {
+    match &dialog.dialog_type {
+        DialogType::ModelSelector
+        | DialogType::ProviderSelector
+        | DialogType::SessionList
+        | DialogType::Timeline
+        | DialogType::AgentSelector => {
             handle_selector_input(app, key.code).await?;
         }
-        Some(DialogType::ApiKeyInput) => {
+        DialogType::ApiKeyInput => {
             handle_api_key_input(app, key.code).await?;
         }
-        Some(DialogType::AuthMethodSelector) => {
+        DialogType::SessionRename => {
+            handle_rename_input(app, key.code).await?;
+        }
+        DialogType::AuthMethodSelector => {
             handle_auth_method_input(app, key.code, &event_tx).await?;
         }
-        Some(DialogType::OAuthDeviceCode) | Some(DialogType::OAuthWaiting) => {
+        DialogType::OAuthDeviceCode | DialogType::OAuthWaiting => {
             if key.code == KeyCode::Esc {
                 app.open_provider_selector();
             }
         }
-        Some(DialogType::PermissionRequest) => {
+        DialogType::PermissionRequest => {
             handle_permission_input(app, key.code, &event_tx).await?;
         }
-        _ => {
+        DialogType::None => {
             if key.code == KeyCode::Esc {
                 app.close_dialog();
             }

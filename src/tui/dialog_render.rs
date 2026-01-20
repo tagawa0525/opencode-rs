@@ -14,15 +14,18 @@ use ratatui::{
 use super::theme::Theme;
 use super::types::{DialogState, DialogType};
 
-/// Render a dialog overlay
-pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
-    // Calculate dialog size
+/// Calculate centered dialog area
+fn calculate_dialog_area(area: Rect) -> Rect {
     let width = area.width.clamp(40, 60);
     let height = area.height.clamp(10, 20);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
+}
 
-    let dialog_area = Rect::new(x, y, width, height);
+/// Render a dialog overlay
+pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
+    let dialog_area = calculate_dialog_area(area);
 
     // Clear the area behind the dialog
     frame.render_widget(Clear, dialog_area);
@@ -40,11 +43,17 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
     match dialog.dialog_type {
         DialogType::ModelSelector
         | DialogType::ProviderSelector
-        | DialogType::AuthMethodSelector => {
+        | DialogType::AuthMethodSelector
+        | DialogType::SessionList
+        | DialogType::Timeline
+        | DialogType::AgentSelector => {
             render_select_dialog(frame, dialog, theme, inner);
         }
         DialogType::ApiKeyInput => {
             render_input_dialog(frame, dialog, theme, inner);
+        }
+        DialogType::SessionRename => {
+            render_rename_dialog(frame, dialog, theme, inner);
         }
         DialogType::OAuthDeviceCode => {
             render_device_code_dialog(frame, dialog, theme, inner);
@@ -144,6 +153,52 @@ fn render_select_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, 
 
     // Help text (fzf style)
     let help = Paragraph::new("Up/Down: Navigate | Enter: Select | Esc: Cancel")
+        .style(Style::default().fg(theme.dim))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[4]);
+}
+
+/// Render session rename dialog
+fn render_rename_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Message
+            Constraint::Length(1), // Spacer
+            Constraint::Length(3), // Input
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    // Message
+    if let Some(message) = &dialog.message {
+        let msg = Paragraph::new(message.as_str())
+            .style(Style::default().fg(theme.foreground))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(msg, chunks[0]);
+    }
+
+    // Input field
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(" Session Name ");
+
+    let inner_input = input_block.inner(chunks[2]);
+    frame.render_widget(input_block, chunks[2]);
+
+    // Display the current input value
+    let display_text = if dialog.input_value.is_empty() {
+        Span::styled("Enter session name...", Style::default().fg(theme.dim))
+    } else {
+        Span::styled(&dialog.input_value, Style::default().fg(theme.foreground))
+    };
+    let input = Paragraph::new(display_text);
+    frame.render_widget(input, inner_input);
+
+    // Help text
+    let help = Paragraph::new("Enter: Save | Esc: Cancel")
         .style(Style::default().fg(theme.dim))
         .alignment(Alignment::Center);
     frame.render_widget(help, chunks[4]);
