@@ -96,6 +96,8 @@ pub struct InputBox<'a> {
     pub placeholder: &'a str,
     pub focused: bool,
     pub theme: &'a Theme,
+    pub is_processing: bool,
+    pub spinner_frame: usize,
 }
 
 impl<'a> Widget for InputBox<'a> {
@@ -105,7 +107,15 @@ impl<'a> Widget for InputBox<'a> {
             .style(Style::default().bg(self.theme.user_bg));
         bg_block.render(area, buf);
 
-        let display_text = if self.content.is_empty() {
+        let display_text = if self.is_processing {
+            // Show spinner and processing message when processing
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let frame = frames[self.spinner_frame % frames.len()];
+            Span::styled(
+                format!(" {} Processing...", frame),
+                self.theme.text_accent().add_modifier(Modifier::BOLD),
+            )
+        } else if self.content.is_empty() {
             Span::styled(self.placeholder, self.theme.text_dim())
         } else {
             Span::styled(self.content, self.theme.text())
@@ -166,7 +176,11 @@ impl<'a> Widget for Spinner<'a> {
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frame = frames[self.frame % frames.len()];
 
-        let text = format!("{} {}", frame, self.message);
+        let text = if self.message.is_empty() {
+            format!(" {}", frame)
+        } else {
+            format!(" {} {}", frame, self.message)
+        };
         let paragraph = Paragraph::new(text)
             .style(self.theme.text_accent())
             .alignment(Alignment::Left);

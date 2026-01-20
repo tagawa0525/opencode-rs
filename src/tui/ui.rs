@@ -51,6 +51,8 @@ pub fn render(frame: &mut Frame, app: &App) {
         placeholder: "Type a message... (Enter to send, Shift+Enter for newline)",
         focused: true,
         theme,
+        is_processing: app.is_processing,
+        spinner_frame: app.spinner_frame,
     };
     frame.render_widget(input, chunks[2]);
 
@@ -73,22 +75,6 @@ pub fn render(frame: &mut Frame, app: &App) {
         theme,
     };
     frame.render_widget(status, chunks[3]);
-
-    // Show spinner if processing
-    if app.is_processing {
-        let spinner_area = Rect::new(
-            chunks[1].x + 1,
-            chunks[1].y + chunks[1].height - 2,
-            chunks[1].width - 2,
-            1,
-        );
-        let spinner = Spinner {
-            message: "Thinking...",
-            frame: app.spinner_frame,
-            theme,
-        };
-        frame.render_widget(spinner, spinner_area);
-    }
 
     // Render dialog if open
     if let Some(dialog) = &app.dialog {
@@ -137,10 +123,12 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let mut current_y = inner.y;
-    for msg in messages_to_show.iter().rev() {
-        // Calculate height for this message
+    let messages_vec: Vec<_> = messages_to_show.iter().rev().collect();
+
+    for msg in messages_vec.iter() {
+        // Calculate height for this message (+1 for spacing after message)
         let content_lines = msg.content.lines().count();
-        let msg_height = content_lines.max(1).min(10) as u16;
+        let msg_height = (content_lines + 1).max(2).min(11) as u16;
 
         if current_y + msg_height > inner.y + inner.height {
             break;
@@ -158,6 +146,17 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(widget, msg_area);
 
         current_y += msg_height;
+    }
+
+    // Show processing indicator after all messages
+    if app.is_processing && current_y < inner.y + inner.height {
+        let spinner_area = Rect::new(inner.x, current_y, inner.width, 1);
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spinner_char = frames[app.spinner_frame % frames.len()];
+        let spinner_text = format!(" {} Thinking...", spinner_char);
+        let spinner_para = Paragraph::new(spinner_text)
+            .style(app.theme.text_accent().add_modifier(Modifier::BOLD));
+        frame.render_widget(spinner_para, spinner_area);
     }
 }
 
