@@ -28,6 +28,7 @@ pub struct Theme {
     pub assistant_message: Color,
     pub system_message: Color,
     pub tool_message: Color,
+    pub user_bg: Color,
 
     // Syntax highlighting
     pub syntax_keyword: Color,
@@ -59,7 +60,7 @@ impl Theme {
             success: Color::Rgb(144, 238, 144),
             info: Color::Rgb(135, 206, 250),
 
-            border: Color::Rgb(60, 60, 60),
+            border: Color::Rgb(40, 40, 40),
             border_focused: Color::Rgb(138, 180, 248),
             selection: Color::Rgb(60, 80, 120),
             cursor: Color::Rgb(255, 255, 255),
@@ -68,6 +69,7 @@ impl Theme {
             assistant_message: Color::Rgb(220, 220, 220),
             system_message: Color::Rgb(180, 180, 180),
             tool_message: Color::Rgb(200, 180, 255),
+            user_bg: Color::Rgb(80, 55, 35),
 
             syntax_keyword: Color::Rgb(198, 120, 221),
             syntax_string: Color::Rgb(152, 195, 121),
@@ -92,7 +94,7 @@ impl Theme {
             success: Color::Rgb(50, 150, 50),
             info: Color::Rgb(50, 100, 200),
 
-            border: Color::Rgb(200, 200, 200),
+            border: Color::Rgb(230, 230, 230),
             border_focused: Color::Rgb(0, 100, 200),
             selection: Color::Rgb(200, 220, 255),
             cursor: Color::Rgb(0, 0, 0),
@@ -101,6 +103,7 @@ impl Theme {
             assistant_message: Color::Rgb(40, 40, 40),
             system_message: Color::Rgb(100, 100, 100),
             tool_message: Color::Rgb(100, 50, 150),
+            user_bg: Color::Rgb(255, 230, 200),
 
             syntax_keyword: Color::Rgb(160, 60, 180),
             syntax_string: Color::Rgb(60, 140, 60),

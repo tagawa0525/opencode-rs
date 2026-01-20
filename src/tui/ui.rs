@@ -1,15 +1,14 @@
 //! Main UI layout and rendering.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 use super::app::{App, AutocompleteState};
-use super::components::{Header, InputBox, MessageWidget, Spinner, StatusBar};
+use super::components::{Header, InputBox, MessageWidget, StatusBar, SPINNER_FRAMES};
 use super::dialog_render::render_dialog;
 
 /// Main UI rendering function
@@ -17,14 +16,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     let theme = &app.theme;
     let size = frame.area();
 
+    // Calculate input height based on content (min 2, max 10 lines)
+    let input_lines = app.input.lines().count().max(1);
+    let input_height = (input_lines as u16 + 1).clamp(2, 10);
+
     // Main layout: Header, Messages, Input, Status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Header
-            Constraint::Min(10),   // Messages
-            Constraint::Length(5), // Input
-            Constraint::Length(1), // Status bar
+            Constraint::Length(1),            // Header
+            Constraint::Min(10),              // Messages
+            Constraint::Length(input_height), // Input (dynamic)
+            Constraint::Length(1),            // Status bar
         ])
         .split(size);
 
@@ -47,6 +50,8 @@ pub fn render(frame: &mut Frame, app: &App) {
         placeholder: "Type a message... (Enter to send, Shift+Enter for newline)",
         focused: true,
         theme,
+        is_processing: app.is_processing,
+        spinner_frame: app.spinner_frame,
     };
     frame.render_widget(input, chunks[2]);
 
@@ -70,22 +75,6 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(status, chunks[3]);
 
-    // Show spinner if processing
-    if app.is_processing {
-        let spinner_area = Rect::new(
-            chunks[1].x + 1,
-            chunks[1].y + chunks[1].height - 2,
-            chunks[1].width - 2,
-            1,
-        );
-        let spinner = Spinner {
-            message: "Thinking...",
-            frame: app.spinner_frame,
-            theme,
-        };
-        frame.render_widget(spinner, spinner_area);
-    }
-
     // Render dialog if open
     if let Some(dialog) = &app.dialog {
         render_dialog(frame, dialog, &app.theme, size);
@@ -97,74 +86,96 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Calculate visible line count for message content
+fn calculate_message_height(content: &str) -> u16 {
+    content
+        .trim()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        .max(1) as u16
+}
+
 /// Render messages area
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(app.theme.border(false))
-        .title(" Chat ");
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
     if app.messages.is_empty() {
-        // Show welcome message
-        let welcome = format!(
-            "Welcome to opencode!\n\n\
-             Model: {}\n\n\
-             Tips:\n\
-             • Type your message and press Enter to send\n\
-             • Use Shift+Enter for multi-line input\n\
-             • Press Ctrl+C to quit",
-            app.model_display
-        );
-        let paragraph = Paragraph::new(welcome)
-            .style(app.theme.text_dim())
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, inner);
+        render_welcome_message(frame, app, area);
         return;
     }
 
-    // Calculate total height needed
-    let max_y = inner.height as usize;
+    let messages = &app.messages;
+    let mut visible_messages: Vec<(&str, &str, u16, bool)> = Vec::new();
+    let mut total_height = 0u16;
 
-    // Render messages from bottom to top (newest first visible)
-    let messages_to_show: Vec<_> = app
-        .messages
-        .iter()
-        .rev()
-        .take(max_y) // Take at most max_y messages
-        .collect();
+    // Collect messages from newest to oldest until we fill the area
+    for (idx, msg) in messages.iter().enumerate().rev() {
+        let msg_height = calculate_message_height(&msg.content);
+        let needs_separator = idx + 1 < messages.len() && msg.role != messages[idx + 1].role;
+        let separator_height = if needs_separator { 1 } else { 0 };
+        let item_height = msg_height + separator_height;
 
-    let mut current_y = inner.y;
-    for msg in messages_to_show.iter().rev() {
-        let timestamp = chrono::DateTime::from_timestamp_millis(msg.time_created)
-            .map(|t| t.format("%H:%M").to_string())
-            .unwrap_or_default();
-
-        // Calculate height for this message
-        let content_lines = msg.content.lines().count() + 2; // +2 for header and spacing
-        let msg_height = content_lines.min(10) as u16;
-
-        if current_y + msg_height > inner.y + inner.height {
+        if total_height + item_height > area.height {
             break;
         }
 
-        let msg_area = Rect::new(inner.x, current_y, inner.width, msg_height);
-
-        let widget = MessageWidget {
-            role: &msg.role,
-            content: &msg.content,
-            timestamp: &timestamp,
-            theme: &app.theme,
-            selected: false,
-        };
-        frame.render_widget(widget, msg_area);
-
-        current_y += msg_height;
+        total_height += item_height;
+        visible_messages.push((&msg.content, &msg.role, msg_height, needs_separator));
     }
+
+    // Render from oldest to newest (top to bottom)
+    visible_messages.reverse();
+
+    let mut current_y = area.y;
+    for (content, role, msg_height, needs_separator) in visible_messages {
+        let msg_area = Rect::new(area.x, current_y, area.width, msg_height);
+        frame.render_widget(
+            MessageWidget {
+                role,
+                content,
+                timestamp: "",
+                theme: &app.theme,
+                selected: false,
+            },
+            msg_area,
+        );
+        current_y += msg_height;
+
+        if needs_separator && current_y < area.y + area.height {
+            let separator_area = Rect::new(area.x, current_y, area.width, 1);
+            let separator =
+                Paragraph::new("─".repeat(area.width as usize)).style(app.theme.text_dim());
+            frame.render_widget(separator, separator_area);
+            current_y += 1;
+        }
+    }
+
+    // Show processing indicator
+    if app.is_processing && current_y < area.y + area.height {
+        let spinner_area = Rect::new(area.x, current_y, area.width, 1);
+        let spinner_char = SPINNER_FRAMES[app.spinner_frame % SPINNER_FRAMES.len()];
+        let spinner = Paragraph::new(format!(" {} Thinking...", spinner_char))
+            .style(app.theme.text_accent().add_modifier(Modifier::BOLD));
+        frame.render_widget(spinner, spinner_area);
+    }
+}
+
+/// Render welcome message when no messages exist
+fn render_welcome_message(frame: &mut Frame, app: &App, area: Rect) {
+    let welcome = format!(
+        "Welcome to opencode!\n\n\
+         Model: {}\n\n\
+         Tips:\n\
+         • Type your message and press Enter to send\n\
+         • Use Shift+Enter for multi-line input\n\
+         • Press Ctrl+C to quit",
+        app.model_display
+    );
+    frame.render_widget(
+        Paragraph::new(welcome)
+            .style(app.theme.text_dim())
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Render autocomplete popup

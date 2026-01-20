@@ -298,15 +298,16 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
         AppEvent::StreamDone => {
             app.is_processing = false;
             app.status = "Ready".to_string();
+            app.clear_tool_batch();
         }
         AppEvent::StreamError(err) => {
             app.is_processing = false;
             app.status = "Error".to_string();
+            app.clear_tool_batch();
             app.add_message("system", &format!("Error: {}", err));
         }
         AppEvent::ToolCall(name, id) => {
-            app.append_to_assistant(&format!("\n[Calling tool: {}]\n", name));
-            app.add_tool_call(&id, &name, "");
+            app.handle_tool_call(&id, &name);
         }
         AppEvent::DeviceCodeReceived {
             user_code,
@@ -339,7 +340,7 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
             output,
             is_error,
         } => {
-            handle_tool_result(app, &id, &output, is_error);
+            app.handle_tool_result_grouped(&id, &output, is_error);
         }
         AppEvent::PermissionRequested(request) => {
             app.show_permission_request(request);
@@ -351,46 +352,6 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
     Ok(())
 }
 
-/// Extract display text from tool output (JSON title or truncated output)
-fn extract_display_output(output: &str) -> String {
-    // Try to parse as JSON and extract title
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) {
-        if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
-            return title.to_string();
-        }
-    }
-
-    // Truncate if too long
-    if output.len() > 200 {
-        format!("{}...", &output[..200])
-    } else {
-        output.to_string()
-    }
-}
-
-/// Handle tool result event
-fn handle_tool_result(app: &mut App, id: &str, output: &str, is_error: bool) {
-    let status = if is_error { "ERROR" } else { "OK" };
-    let display_output = extract_display_output(output);
-
-    app.append_to_assistant(&format!(
-        "\n[Tool {} result: {}] {}\n",
-        id, status, display_output
-    ));
-    app.add_tool_result(id, output, is_error);
-}
-
-/// Convert permission scope to display text
-fn scope_to_text(scope: crate::tool::PermissionScope) -> &'static str {
-    use crate::tool::PermissionScope;
-    match scope {
-        PermissionScope::Once => "once",
-        PermissionScope::Session => "session",
-        PermissionScope::Workspace => "workspace",
-        PermissionScope::Global => "global",
-    }
-}
-
 /// Handle permission response event
 fn handle_permission_response(
     app: &mut App,
@@ -398,14 +359,23 @@ fn handle_permission_response(
     allow: bool,
     scope: crate::tool::PermissionScope,
 ) {
+    use crate::tool::PermissionScope;
+
     // Send response to waiting tool
     let id_clone = id.to_string();
     tokio::spawn(async move {
         super::llm_streaming::send_permission_response(id_clone, allow, scope).await;
     });
 
+    let scope_text = match scope {
+        PermissionScope::Once => "once",
+        PermissionScope::Session => "session",
+        PermissionScope::Workspace => "workspace",
+        PermissionScope::Global => "global",
+    };
+
     app.status = if allow {
-        format!("Permission granted ({}): {}", scope_to_text(scope), id)
+        format!("Permission granted ({}): {}", scope_text, id)
     } else {
         format!("Permission denied: {}", id)
     };

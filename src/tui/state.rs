@@ -81,6 +81,21 @@ pub struct App {
     pub input_history_position: Option<usize>,
     /// Temporary input buffer when navigating history
     pub input_history_buffer: String,
+    /// Current tool batch for grouping consecutive tool calls
+    pub tool_batch: Option<ToolBatch>,
+}
+
+/// Tracks a batch of consecutive tool calls of the same type
+#[derive(Debug, Clone)]
+pub struct ToolBatch {
+    /// Tool name
+    pub tool_name: String,
+    /// Total number of calls in this batch
+    pub total_count: usize,
+    /// Number of completed calls
+    pub completed_count: usize,
+    /// Tool call IDs in this batch
+    pub call_ids: Vec<String>,
 }
 
 impl Default for App {
@@ -117,6 +132,7 @@ impl Default for App {
             input_history: Vec::new(),
             input_history_position: None,
             input_history_buffer: String::new(),
+            tool_batch: None,
         }
     }
 }
@@ -468,6 +484,156 @@ impl App {
             if msg.role == "assistant" {
                 msg.content.push_str(delta);
             }
+        }
+    }
+
+    /// Handle a tool call - groups consecutive calls of the same tool
+    pub fn handle_tool_call(&mut self, id: &str, name: &str) {
+        // Check if we should add to existing batch or start a new one
+        let should_start_new_batch = match &self.tool_batch {
+            None => true,
+            Some(batch) => batch.tool_name != name,
+        };
+
+        if should_start_new_batch {
+            // Finalize previous batch display if exists
+            self.finalize_tool_batch_display();
+
+            // Start new batch
+            self.tool_batch = Some(ToolBatch {
+                tool_name: name.to_string(),
+                total_count: 1,
+                completed_count: 0,
+                call_ids: vec![id.to_string()],
+            });
+
+            // Add initial display line
+            self.append_to_assistant(&format!("[Calling tool: {}]\n", name));
+        } else if let Some(batch) = &mut self.tool_batch {
+            // Add to existing batch
+            batch.total_count += 1;
+            batch.call_ids.push(id.to_string());
+
+            // Update the display line
+            self.update_tool_batch_display();
+        }
+
+        // Also add the tool call part
+        self.add_tool_call(id, name, "");
+    }
+
+    /// Handle a tool result - updates progress for batched calls
+    pub fn handle_tool_result_grouped(&mut self, id: &str, output: &str, is_error: bool) {
+        let batch_info = self.tool_batch.as_mut().and_then(|batch| {
+            if !batch.call_ids.contains(&id.to_string()) {
+                return None;
+            }
+            batch.completed_count += 1;
+            Some((
+                batch.tool_name.clone(),
+                batch.completed_count,
+                batch.total_count,
+                batch.completed_count >= batch.total_count,
+            ))
+        });
+
+        if let Some((tool_name, completed, total, is_complete)) = batch_info {
+            self.update_tool_batch_display_with(&tool_name, completed, total);
+            if is_complete {
+                self.tool_batch = None;
+            }
+        } else {
+            // Not in batch, show individual result
+            let status = if is_error { "ERROR" } else { "OK" };
+            let display_output = Self::extract_display_output(output);
+            self.append_to_assistant(&format!(
+                "[Tool {} result: {}] {}\n",
+                id, status, display_output
+            ));
+        }
+
+        self.add_tool_result(id, output, is_error);
+    }
+
+    /// Update the tool batch display line
+    fn update_tool_batch_display(&mut self) {
+        let Some(batch) = &self.tool_batch else {
+            return;
+        };
+        let (tool_name, completed, total) = (
+            batch.tool_name.clone(),
+            batch.completed_count,
+            batch.total_count,
+        );
+        self.update_tool_batch_display_with(&tool_name, completed, total);
+    }
+
+    /// Update the tool batch display line with explicit parameters
+    fn update_tool_batch_display_with(&mut self, tool_name: &str, completed: usize, total: usize) {
+        let Some(msg) = self.messages.last_mut() else {
+            return;
+        };
+        if msg.role != "assistant" {
+            return;
+        }
+
+        let search_prefix = format!("[Calling tool: {}", tool_name);
+        let replacement = if total > 1 {
+            format!("[Calling tool: {}] ({}/{})", tool_name, completed, total)
+        } else {
+            format!("[Calling tool: {}]", tool_name)
+        };
+
+        // Find and update the last tool call line (searching from end)
+        let new_content: String = msg
+            .content
+            .lines()
+            .rev()
+            .scan(false, |found, line| {
+                if !*found && line.contains(&search_prefix) {
+                    *found = true;
+                    Some(replacement.clone())
+                } else {
+                    Some(line.to_string())
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        msg.content = new_content;
+        if !msg.content.ends_with('\n') {
+            msg.content.push('\n');
+        }
+    }
+
+    /// Finalize tool batch display when switching to a new tool
+    fn finalize_tool_batch_display(&mut self) {
+        // Nothing special needed - the last state is already displayed
+        self.tool_batch = None;
+    }
+
+    /// Clear tool batch (call when stream completes)
+    pub fn clear_tool_batch(&mut self) {
+        self.tool_batch = None;
+    }
+
+    /// Extract display text from tool output (JSON title or truncated output)
+    fn extract_display_output(output: &str) -> String {
+        // Try to parse as JSON and extract title
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) {
+            if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                return title.to_string();
+            }
+        }
+
+        // Truncate if too long
+        if output.len() > 200 {
+            format!("{}...", &output[..200])
+        } else {
+            output.to_string()
         }
     }
 

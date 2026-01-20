@@ -10,6 +10,9 @@ use ratatui::{
 
 use super::theme::Theme;
 
+/// Spinner animation frames (braille pattern)
+pub const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// Header component showing session info and model
 pub struct Header<'a> {
     pub title: &'a str,
@@ -66,49 +69,26 @@ pub struct MessageWidget<'a> {
 
 impl<'a> Widget for MessageWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let style = match self.role {
-            "user" => self.theme.user(),
-            "assistant" => self.theme.assistant(),
-            "tool" => self.theme.tool(),
-            _ => self.theme.text(),
+        let bg_style = if self.role == "user" {
+            Style::default().bg(self.theme.user_bg)
+        } else {
+            Style::default()
         };
 
-        let role_display = match self.role {
-            "user" => "You",
-            "assistant" => "Assistant",
-            "tool" => "Tool",
-            _ => self.role,
-        };
-
-        let header = Line::from(vec![
-            Span::styled(
-                format!("{} ", role_display),
-                style.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(self.timestamp, self.theme.text_dim()),
-        ]);
+        Block::default().style(bg_style).render(area, buf);
 
         let content_lines: Vec<Line> = self
             .content
+            .trim()
             .lines()
-            .map(|line| Line::from(Span::styled(line, self.theme.text())))
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| Line::from(Span::styled(format!(" {} ", line), self.theme.text())))
             .collect();
 
-        let mut lines = vec![header];
-        lines.extend(content_lines);
-        lines.push(Line::from("")); // Spacing
-
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::NONE)
-                .style(if self.selected {
-                    self.theme.selection()
-                } else {
-                    Style::default()
-                }),
-        );
-
-        paragraph.render(area, buf);
+        Paragraph::new(content_lines)
+            .wrap(Wrap { trim: false })
+            .style(bg_style)
+            .render(area, buf);
     }
 }
 
@@ -119,26 +99,31 @@ pub struct InputBox<'a> {
     pub placeholder: &'a str,
     pub focused: bool,
     pub theme: &'a Theme,
+    pub is_processing: bool,
+    pub spinner_frame: usize,
 }
 
 impl<'a> Widget for InputBox<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(self.theme.border(self.focused))
-            .title(" Message ");
+        let bg_style = Style::default().bg(self.theme.user_bg);
+        Block::default().style(bg_style).render(area, buf);
 
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        let display_text = if self.content.is_empty() {
+        let display_text = if self.is_processing {
+            let frame = SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()];
+            Span::styled(
+                format!(" {} Processing...", frame),
+                self.theme.text_accent().add_modifier(Modifier::BOLD),
+            )
+        } else if self.content.is_empty() {
             Span::styled(self.placeholder, self.theme.text_dim())
         } else {
             Span::styled(self.content, self.theme.text())
         };
 
-        let paragraph = Paragraph::new(display_text).wrap(Wrap { trim: false });
-        paragraph.render(inner, buf);
+        Paragraph::new(display_text)
+            .wrap(Wrap { trim: false })
+            .style(bg_style)
+            .render(area, buf);
     }
 }
 
@@ -187,14 +172,17 @@ pub struct Spinner<'a> {
 
 impl<'a> Widget for Spinner<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let frame = frames[self.frame % frames.len()];
+        let frame = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
+        let text = if self.message.is_empty() {
+            format!(" {}", frame)
+        } else {
+            format!(" {} {}", frame, self.message)
+        };
 
-        let text = format!("{} {}", frame, self.message);
-        let paragraph = Paragraph::new(text)
+        Paragraph::new(text)
             .style(self.theme.text_accent())
-            .alignment(Alignment::Left);
-        paragraph.render(area, buf);
+            .alignment(Alignment::Left)
+            .render(area, buf);
     }
 }
 
