@@ -360,7 +360,10 @@ async fn handle_fork_session(app: &mut App) -> Result<()> {
     app.total_cost = 0.0;
     app.total_tokens = 0;
 
-    app.add_message("system", &format!("Session forked successfully: {}", new_session.title));
+    app.add_message(
+        "system",
+        &format!("Session forked successfully: {}", new_session.title),
+    );
 
     Ok(())
 }

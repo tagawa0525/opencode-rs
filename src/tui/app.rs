@@ -206,6 +206,9 @@ async fn handle_submit(app: &mut App, event_tx: &mpsc::Sender<AppEvent>) -> Resu
     }
 
     if let Some(input) = app.take_input() {
+        // Add to input history (before processing)
+        app.add_input_to_history(&input);
+
         if input.trim() == "/" {
             show_slash_command_help(app).await;
         } else if let Some(parsed) = ParsedCommand::parse(&input) {
@@ -252,6 +255,15 @@ async fn handle_key_input(
         app.is_processing = false;
         app.status = "Ready".to_string();
     } else {
+        // Reset input history navigation when user starts typing
+        match action {
+            Action::Char(_) | Action::Backspace | Action::Delete | Action::ClearInput => {
+                app.input_history_position = None;
+                app.input_history_buffer.clear();
+            }
+            _ => {}
+        }
+
         app.handle_action(action);
         app.update_autocomplete().await;
     }

@@ -385,9 +385,11 @@ async fn handle_rename_submit(app: &mut App) -> Result<()> {
     if let Some(session) = &mut app.session {
         session.title = new_title.clone();
         let project_id = session.project_id.clone();
-        session.update(&project_id, |s| {
-            s.title = new_title.clone();
-        }).await?;
+        session
+            .update(&project_id, |s| {
+                s.title = new_title.clone();
+            })
+            .await?;
         app.session_title = new_title;
         app.add_message("system", "Session renamed successfully");
     }
@@ -571,7 +573,9 @@ pub async fn handle_dialog_input(
     let dialog_type = app.dialog.as_ref().map(|d| d.dialog_type.clone());
 
     match dialog_type {
-        Some(DialogType::ModelSelector) | Some(DialogType::ProviderSelector) => {
+        Some(DialogType::ModelSelector)
+        | Some(DialogType::ProviderSelector)
+        | Some(DialogType::SessionList) => {
             handle_selector_input(app, key.code).await?;
         }
         Some(DialogType::ApiKeyInput) => {

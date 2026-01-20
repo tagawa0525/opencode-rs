@@ -75,6 +75,12 @@ pub struct App {
     pub history_position: usize,
     /// Maximum history entries
     pub max_history: usize,
+    /// Input history (past user messages)
+    pub input_history: Vec<String>,
+    /// Current position in input history (0 = most recent)
+    pub input_history_position: Option<usize>,
+    /// Temporary input buffer when navigating history
+    pub input_history_buffer: String,
 }
 
 impl Default for App {
@@ -108,6 +114,9 @@ impl Default for App {
             message_history: Vec::new(),
             history_position: 0,
             max_history: 50,
+            input_history: Vec::new(),
+            input_history_position: None,
+            input_history_buffer: String::new(),
         }
     }
 }
@@ -234,6 +243,81 @@ impl App {
         }
     }
 
+    /// Add input to history
+    pub fn add_input_to_history(&mut self, input: &str) {
+        // Don't add empty or whitespace-only inputs
+        if input.trim().is_empty() {
+            return;
+        }
+
+        // Don't add if it's the same as the most recent entry
+        if self.input_history.first().map(|s| s.as_str()) == Some(input) {
+            return;
+        }
+
+        // Add to front of history (most recent first)
+        self.input_history.insert(0, input.to_string());
+
+        // Limit history size to 100 entries
+        if self.input_history.len() > 100 {
+            self.input_history.truncate(100);
+        }
+
+        // Reset history position
+        self.input_history_position = None;
+    }
+
+    /// Navigate to previous input in history (PageUp)
+    pub fn history_previous(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+
+        match self.input_history_position {
+            None => {
+                // First time navigating history - save current input
+                self.input_history_buffer = self.input.clone();
+                self.input_history_position = Some(0);
+            }
+            Some(pos) => {
+                // Move to older entry if available
+                if pos + 1 < self.input_history.len() {
+                    self.input_history_position = Some(pos + 1);
+                }
+            }
+        }
+
+        // Load the entry at current position
+        if let Some(pos) = self.input_history_position {
+            if let Some(entry) = self.input_history.get(pos) {
+                self.input = entry.clone();
+                self.cursor_position = self.input.len();
+            }
+        }
+    }
+
+    /// Navigate to next input in history (PageDown)
+    pub fn history_next(&mut self) {
+        match self.input_history_position {
+            None => { /* Not in history navigation mode */ }
+            Some(0) => {
+                // At the most recent entry - restore buffer
+                self.input = self.input_history_buffer.clone();
+                self.cursor_position = self.input.len();
+                self.input_history_position = None;
+                self.input_history_buffer.clear();
+            }
+            Some(pos) => {
+                // Move to newer entry
+                self.input_history_position = Some(pos - 1);
+                if let Some(entry) = self.input_history.get(pos - 1) {
+                    self.input = entry.clone();
+                    self.cursor_position = self.input.len();
+                }
+            }
+        }
+    }
+
     /// Check if a model is configured and ready to use
     pub fn is_ready(&self) -> bool {
         self.model_configured && !self.provider_id.is_empty() && !self.model_id.is_empty()
@@ -314,6 +398,12 @@ impl App {
                 self.input.clear();
                 self.cursor_position = 0;
             }
+            Action::PageUp => {
+                self.history_previous();
+            }
+            Action::PageDown => {
+                self.history_next();
+            }
             _ => {}
         }
     }
@@ -325,6 +415,9 @@ impl App {
         }
         let input = std::mem::take(&mut self.input);
         self.cursor_position = 0;
+        // Reset history navigation state
+        self.input_history_position = None;
+        self.input_history_buffer.clear();
         Some(input)
     }
 
