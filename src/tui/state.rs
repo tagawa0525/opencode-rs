@@ -267,53 +267,51 @@ impl App {
         self.input_history_position = None;
     }
 
+    /// Set input and update cursor position to end
+    fn set_input_and_cursor(&mut self, text: String) {
+        self.cursor_position = text.len();
+        self.input = text;
+    }
+
     /// Navigate to previous input in history (PageUp)
     pub fn history_previous(&mut self) {
         if self.input_history.is_empty() {
             return;
         }
 
-        match self.input_history_position {
+        let new_pos = match self.input_history_position {
             None => {
                 // First time navigating history - save current input
                 self.input_history_buffer = self.input.clone();
-                self.input_history_position = Some(0);
+                0
             }
-            Some(pos) => {
-                // Move to older entry if available
-                if pos + 1 < self.input_history.len() {
-                    self.input_history_position = Some(pos + 1);
-                }
-            }
-        }
+            Some(pos) if pos + 1 < self.input_history.len() => pos + 1,
+            Some(pos) => pos, // Already at oldest entry
+        };
 
-        // Load the entry at current position
-        if let Some(pos) = self.input_history_position {
-            if let Some(entry) = self.input_history.get(pos) {
-                self.input = entry.clone();
-                self.cursor_position = self.input.len();
-            }
+        self.input_history_position = Some(new_pos);
+
+        if let Some(entry) = self.input_history.get(new_pos).cloned() {
+            self.set_input_and_cursor(entry);
         }
     }
 
     /// Navigate to next input in history (PageDown)
     pub fn history_next(&mut self) {
-        match self.input_history_position {
-            None => { /* Not in history navigation mode */ }
-            Some(0) => {
-                // At the most recent entry - restore buffer
-                self.input = self.input_history_buffer.clone();
-                self.cursor_position = self.input.len();
-                self.input_history_position = None;
-                self.input_history_buffer.clear();
-            }
-            Some(pos) => {
-                // Move to newer entry
-                self.input_history_position = Some(pos - 1);
-                if let Some(entry) = self.input_history.get(pos - 1) {
-                    self.input = entry.clone();
-                    self.cursor_position = self.input.len();
-                }
+        let Some(pos) = self.input_history_position else {
+            return; // Not in history navigation mode
+        };
+
+        if pos == 0 {
+            // At the most recent entry - restore buffer
+            let buffer = std::mem::take(&mut self.input_history_buffer);
+            self.set_input_and_cursor(buffer);
+            self.input_history_position = None;
+        } else {
+            // Move to newer entry
+            self.input_history_position = Some(pos - 1);
+            if let Some(entry) = self.input_history.get(pos - 1).cloned() {
+                self.set_input_and_cursor(entry);
             }
         }
     }
@@ -408,14 +406,14 @@ impl App {
         }
     }
 
-    /// Submit the current input
+    /// Submit the current input and reset state
     pub fn take_input(&mut self) -> Option<String> {
         if self.input.trim().is_empty() {
             return None;
         }
+
         let input = std::mem::take(&mut self.input);
         self.cursor_position = 0;
-        // Reset history navigation state
         self.input_history_position = None;
         self.input_history_buffer.clear();
         Some(input)

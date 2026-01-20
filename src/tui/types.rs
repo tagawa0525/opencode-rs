@@ -104,7 +104,6 @@ pub struct SelectItem {
     pub provider_id: Option<String>,
 }
 
-/// Permission request for tool execution
 /// Permission request from tool execution
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {

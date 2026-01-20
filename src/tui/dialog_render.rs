@@ -14,15 +14,18 @@ use ratatui::{
 use super::theme::Theme;
 use super::types::{DialogState, DialogType};
 
-/// Render a dialog overlay
-pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
-    // Calculate dialog size
+/// Calculate centered dialog area
+fn calculate_dialog_area(area: Rect) -> Rect {
     let width = area.width.clamp(40, 60);
     let height = area.height.clamp(10, 20);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
+}
 
-    let dialog_area = Rect::new(x, y, width, height);
+/// Render a dialog overlay
+pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
+    let dialog_area = calculate_dialog_area(area);
 
     // Clear the area behind the dialog
     frame.render_widget(Clear, dialog_area);

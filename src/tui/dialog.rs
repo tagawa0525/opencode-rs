@@ -147,8 +147,6 @@ impl App {
 
     /// Open agent selector dialog
     pub async fn open_agent_selector(&mut self) -> Result<()> {
-        use crate::config::Config;
-
         // Load config to get agent definitions
         let config = Config::load().await?;
 
@@ -438,15 +436,9 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-/// Handle input for API key input dialog
-async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+/// Handle text input for dialogs (shared logic for API key and rename dialogs)
+fn handle_text_input_key(app: &mut App, key_code: KeyCode) {
     match key_code {
-        KeyCode::Esc => {
-            app.open_provider_selector();
-        }
-        KeyCode::Enter => {
-            handle_api_key_submit(app).await?;
-        }
         KeyCode::Char(c) => {
             if let Some(dialog) = &mut app.dialog {
                 dialog.input_value.push(c);
@@ -459,29 +451,24 @@ async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
         }
         _ => {}
     }
+}
+
+/// Handle input for API key input dialog
+async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    match key_code {
+        KeyCode::Esc => app.open_provider_selector(),
+        KeyCode::Enter => handle_api_key_submit(app).await?,
+        _ => handle_text_input_key(app, key_code),
+    }
     Ok(())
 }
 
 /// Handle input for session rename dialog
 async fn handle_rename_input(app: &mut App, key_code: KeyCode) -> Result<()> {
     match key_code {
-        KeyCode::Esc => {
-            app.close_dialog();
-        }
-        KeyCode::Enter => {
-            handle_rename_submit(app).await?;
-        }
-        KeyCode::Char(c) => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.input_value.push(c);
-            }
-        }
-        KeyCode::Backspace => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.input_value.pop();
-            }
-        }
-        _ => {}
+        KeyCode::Esc => app.close_dialog(),
+        KeyCode::Enter => handle_rename_submit(app).await?,
+        _ => handle_text_input_key(app, key_code),
     }
     Ok(())
 }
@@ -689,34 +676,36 @@ pub async fn handle_dialog_input(
     key: crossterm::event::KeyEvent,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Result<()> {
-    let dialog_type = app.dialog.as_ref().map(|d| d.dialog_type.clone());
+    let Some(dialog) = &app.dialog else {
+        return Ok(());
+    };
 
-    match dialog_type {
-        Some(DialogType::ModelSelector)
-        | Some(DialogType::ProviderSelector)
-        | Some(DialogType::SessionList)
-        | Some(DialogType::Timeline)
-        | Some(DialogType::AgentSelector) => {
+    match &dialog.dialog_type {
+        DialogType::ModelSelector
+        | DialogType::ProviderSelector
+        | DialogType::SessionList
+        | DialogType::Timeline
+        | DialogType::AgentSelector => {
             handle_selector_input(app, key.code).await?;
         }
-        Some(DialogType::ApiKeyInput) => {
+        DialogType::ApiKeyInput => {
             handle_api_key_input(app, key.code).await?;
         }
-        Some(DialogType::SessionRename) => {
+        DialogType::SessionRename => {
             handle_rename_input(app, key.code).await?;
         }
-        Some(DialogType::AuthMethodSelector) => {
+        DialogType::AuthMethodSelector => {
             handle_auth_method_input(app, key.code, &event_tx).await?;
         }
-        Some(DialogType::OAuthDeviceCode) | Some(DialogType::OAuthWaiting) => {
+        DialogType::OAuthDeviceCode | DialogType::OAuthWaiting => {
             if key.code == KeyCode::Esc {
                 app.open_provider_selector();
             }
         }
-        Some(DialogType::PermissionRequest) => {
+        DialogType::PermissionRequest => {
             handle_permission_input(app, key.code, &event_tx).await?;
         }
-        _ => {
+        DialogType::None => {
             if key.code == KeyCode::Esc {
                 app.close_dialog();
             }

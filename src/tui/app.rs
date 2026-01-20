@@ -220,6 +220,25 @@ async fn handle_submit(app: &mut App, event_tx: &mpsc::Sender<AppEvent>) -> Resu
     Ok(())
 }
 
+/// Handle keyboard shortcuts (Ctrl+M, Ctrl+P)
+fn handle_keyboard_shortcuts(app: &mut App, key: &KeyEvent) -> bool {
+    if key.modifiers != KeyModifiers::CONTROL {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Char('m') => {
+            app.open_model_selector();
+            true
+        }
+        KeyCode::Char('p') => {
+            app.open_provider_selector();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Handle keyboard input in the main loop
 async fn handle_key_input(
     app: &mut App,
@@ -238,34 +257,33 @@ async fn handle_key_input(
     }
 
     // Check for keyboard shortcuts
-    if key.code == KeyCode::Char('m') && key.modifiers == KeyModifiers::CONTROL {
-        app.open_model_selector();
-        return Ok(());
-    }
-    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
-        app.open_provider_selector();
+    if handle_keyboard_shortcuts(app, &key) {
         return Ok(());
     }
 
     let action = key_to_action(key);
 
-    if action == Action::Submit && !app.is_processing {
-        handle_submit(app, event_tx).await?;
-    } else if action == Action::Cancel && app.is_processing {
-        app.is_processing = false;
-        app.status = "Ready".to_string();
-    } else {
-        // Reset input history navigation when user starts typing
-        match action {
-            Action::Char(_) | Action::Backspace | Action::Delete | Action::ClearInput => {
+    match action {
+        Action::Submit if !app.is_processing => {
+            handle_submit(app, event_tx).await?;
+        }
+        Action::Cancel if app.is_processing => {
+            app.is_processing = false;
+            app.status = "Ready".to_string();
+        }
+        _ => {
+            // Reset input history navigation when user starts typing
+            if matches!(
+                action,
+                Action::Char(_) | Action::Backspace | Action::Delete | Action::ClearInput
+            ) {
                 app.input_history_position = None;
                 app.input_history_buffer.clear();
             }
-            _ => {}
-        }
 
-        app.handle_action(action);
-        app.update_autocomplete().await;
+            app.handle_action(action);
+            app.update_autocomplete().await;
+        }
     }
 
     Ok(())
@@ -333,28 +351,44 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
     Ok(())
 }
 
-/// Handle tool result event
-fn handle_tool_result(app: &mut App, id: &str, output: &str, is_error: bool) {
-    let status = if is_error { "ERROR" } else { "OK" };
-    let mut display_output = output.to_string();
-
-    // Try to parse as JSON and extract meaningful info
+/// Extract display text from tool output (JSON title or truncated output)
+fn extract_display_output(output: &str) -> String {
+    // Try to parse as JSON and extract title
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) {
         if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
-            display_output = title.to_string();
+            return title.to_string();
         }
     }
 
-    // Limit output length for display
-    if display_output.len() > 200 {
-        display_output = format!("{}...", &display_output[..200]);
+    // Truncate if too long
+    if output.len() > 200 {
+        format!("{}...", &output[..200])
+    } else {
+        output.to_string()
     }
+}
+
+/// Handle tool result event
+fn handle_tool_result(app: &mut App, id: &str, output: &str, is_error: bool) {
+    let status = if is_error { "ERROR" } else { "OK" };
+    let display_output = extract_display_output(output);
 
     app.append_to_assistant(&format!(
         "\n[Tool {} result: {}] {}\n",
         id, status, display_output
     ));
     app.add_tool_result(id, output, is_error);
+}
+
+/// Convert permission scope to display text
+fn scope_to_text(scope: crate::tool::PermissionScope) -> &'static str {
+    use crate::tool::PermissionScope;
+    match scope {
+        PermissionScope::Once => "once",
+        PermissionScope::Session => "session",
+        PermissionScope::Workspace => "workspace",
+        PermissionScope::Global => "global",
+    }
 }
 
 /// Handle permission response event
@@ -370,17 +404,11 @@ fn handle_permission_response(
         super::llm_streaming::send_permission_response(id_clone, allow, scope).await;
     });
 
-    if allow {
-        let scope_text = match scope {
-            crate::tool::PermissionScope::Once => "once",
-            crate::tool::PermissionScope::Session => "session",
-            crate::tool::PermissionScope::Workspace => "workspace",
-            crate::tool::PermissionScope::Global => "global",
-        };
-        app.status = format!("Permission granted ({}): {}", scope_text, id);
+    app.status = if allow {
+        format!("Permission granted ({}): {}", scope_to_text(scope), id)
     } else {
-        app.status = format!("Permission denied: {}", id);
-    }
+        format!("Permission denied: {}", id)
+    };
 }
 
 /// Process all pending async events

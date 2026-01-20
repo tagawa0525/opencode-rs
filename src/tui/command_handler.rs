@@ -19,13 +19,13 @@ pub async fn handle_command_output(
     output: CommandOutput,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Result<()> {
-    // Handle special actions
+    // Handle special actions first
     if let Some(action) = &output.action {
         return handle_action(app, action).await;
     }
 
-    // Handle special commands
-    if command_name == "clear" || command_name == "new" {
+    // Handle special commands that create new sessions
+    if matches!(command_name, "clear" | "new") {
         create_new_session(app).await;
         return Ok(());
     }
@@ -47,7 +47,7 @@ pub async fn handle_command_output(
         app.add_message("system", &output.text);
     }
 
-    // If the command wants to submit to LLM, do it
+    // Submit to LLM if requested
     if output.submit_to_llm {
         start_llm_response(app, &output.text, event_tx);
     }
@@ -80,36 +80,8 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
         CommandAction::OpenSessionList => {
             app.open_session_list().await?;
         }
-        CommandAction::Undo => {
-            if app.can_undo() {
-                app.undo();
-                app.add_message(
-                    "system",
-                    &format!(
-                        "Undone (step {}/{})",
-                        app.history_position + 1,
-                        app.message_history.len()
-                    ),
-                );
-            } else {
-                app.add_message("system", "Nothing to undo");
-            }
-        }
-        CommandAction::Redo => {
-            if app.can_redo() {
-                app.redo();
-                app.add_message(
-                    "system",
-                    &format!(
-                        "Redone (step {}/{})",
-                        app.history_position + 1,
-                        app.message_history.len()
-                    ),
-                );
-            } else {
-                app.add_message("system", "Nothing to redo");
-            }
-        }
+        CommandAction::Undo => handle_undo(app),
+        CommandAction::Redo => handle_redo(app),
         CommandAction::Compact => {
             // Note: /compact command already works by sending a prompt to LLM
             // This action is not used by the current implementation
@@ -146,10 +118,38 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
     Ok(())
 }
 
-/// Show "not yet implemented" message for an action
-#[allow(dead_code)]
-fn show_not_implemented(app: &mut App, feature: &str) {
-    app.add_message("system", &format!("{} not yet implemented", feature));
+/// Handle undo action
+fn handle_undo(app: &mut App) {
+    if app.can_undo() {
+        app.undo();
+        app.add_message(
+            "system",
+            &format!(
+                "Undone (step {}/{})",
+                app.history_position + 1,
+                app.message_history.len()
+            ),
+        );
+    } else {
+        app.add_message("system", "Nothing to undo");
+    }
+}
+
+/// Handle redo action
+fn handle_redo(app: &mut App) {
+    if app.can_redo() {
+        app.redo();
+        app.add_message(
+            "system",
+            &format!(
+                "Redone (step {}/{})",
+                app.history_position + 1,
+                app.message_history.len()
+            ),
+        );
+    } else {
+        app.add_message("system", "Nothing to redo");
+    }
 }
 
 /// Handle theme toggle action
