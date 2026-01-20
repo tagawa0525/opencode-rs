@@ -340,7 +340,7 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
             output,
             is_error,
         } => {
-            handle_tool_result(app, &id, &output, is_error);
+            app.handle_tool_result_grouped(&id, &output, is_error);
         }
         AppEvent::PermissionRequested(request) => {
             app.show_permission_request(request);
@@ -352,22 +352,6 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
     Ok(())
 }
 
-/// Handle tool result event
-fn handle_tool_result(app: &mut App, id: &str, output: &str, is_error: bool) {
-    app.handle_tool_result_grouped(id, output, is_error);
-}
-
-/// Convert permission scope to display text
-fn scope_to_text(scope: crate::tool::PermissionScope) -> &'static str {
-    use crate::tool::PermissionScope;
-    match scope {
-        PermissionScope::Once => "once",
-        PermissionScope::Session => "session",
-        PermissionScope::Workspace => "workspace",
-        PermissionScope::Global => "global",
-    }
-}
-
 /// Handle permission response event
 fn handle_permission_response(
     app: &mut App,
@@ -375,14 +359,23 @@ fn handle_permission_response(
     allow: bool,
     scope: crate::tool::PermissionScope,
 ) {
+    use crate::tool::PermissionScope;
+
     // Send response to waiting tool
     let id_clone = id.to_string();
     tokio::spawn(async move {
         super::llm_streaming::send_permission_response(id_clone, allow, scope).await;
     });
 
+    let scope_text = match scope {
+        PermissionScope::Once => "once",
+        PermissionScope::Session => "session",
+        PermissionScope::Workspace => "workspace",
+        PermissionScope::Global => "global",
+    };
+
     app.status = if allow {
-        format!("Permission granted ({}): {}", scope_to_text(scope), id)
+        format!("Permission granted ({}): {}", scope_text, id)
     } else {
         format!("Permission denied: {}", id)
     };

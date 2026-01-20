@@ -1,17 +1,15 @@
 //! Main UI layout and rendering.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 use super::app::{App, AutocompleteState};
-use super::components::{Header, InputBox, MessageWidget, Spinner, StatusBar};
+use super::components::{Header, InputBox, MessageWidget, StatusBar, SPINNER_FRAMES};
 use super::dialog_render::render_dialog;
-use super::types::DisplayMessage;
 
 /// Main UI rendering function
 pub fn render(frame: &mut Frame, app: &App) {
@@ -26,10 +24,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),           // Header
-            Constraint::Min(10),             // Messages
+            Constraint::Length(1),            // Header
+            Constraint::Min(10),              // Messages
             Constraint::Length(input_height), // Input (dynamic)
-            Constraint::Length(1),           // Status bar
+            Constraint::Length(1),            // Status bar
         ])
         .split(size);
 
@@ -88,109 +86,96 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Calculate visible line count for message content
+fn calculate_message_height(content: &str) -> u16 {
+    content
+        .trim()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        .max(1) as u16
+}
+
 /// Render messages area
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-
-    let inner = area;
-
     if app.messages.is_empty() {
-        // Show welcome message
-        let welcome = format!(
-            "Welcome to opencode!\n\n\
-             Model: {}\n\n\
-             Tips:\n\
-             • Type your message and press Enter to send\n\
-             • Use Shift+Enter for multi-line input\n\
-             • Press Ctrl+C to quit",
-            app.model_display
-        );
-        let paragraph = Paragraph::new(welcome)
-            .style(app.theme.text_dim())
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, inner);
+        render_welcome_message(frame, app, area);
         return;
     }
 
-    // First, calculate which messages need separators
-    let messages_vec: Vec<_> = app.messages.iter().collect();
-    let mut need_separators: Vec<bool> = Vec::new();
-
-    for i in 0..messages_vec.len() {
-        // Check if separator is needed after this message (between this and next message chronologically)
-        let need_sep = if i + 1 < messages_vec.len() {
-            messages_vec[i].role != messages_vec[i + 1].role
-        } else {
-            false // No separator after last message
-        };
-        need_separators.push(need_sep);
-    }
-
-    // Render messages from newest to oldest, calculating heights
-    let mut messages_with_heights: Vec<(String, String, u16, bool)> = Vec::new();
+    let messages = &app.messages;
+    let mut visible_messages: Vec<(&str, &str, u16, bool)> = Vec::new();
     let mut total_height = 0u16;
 
-    for (idx, msg) in messages_vec.iter().rev().enumerate() {
-        let msg_index = messages_vec.len() - 1 - idx;
+    // Collect messages from newest to oldest until we fill the area
+    for (idx, msg) in messages.iter().enumerate().rev() {
+        let msg_height = calculate_message_height(&msg.content);
+        let needs_separator = idx + 1 < messages.len() && msg.role != messages[idx + 1].role;
+        let separator_height = if needs_separator { 1 } else { 0 };
+        let item_height = msg_height + separator_height;
 
-        let content_lines = msg.content
-            .trim()
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count();
-        let msg_height = content_lines.max(1) as u16;
-
-        let need_separator = need_separators[msg_index];
-        let separator_height = if need_separator { 1 } else { 0 };
-        let item_total_height = msg_height + separator_height;
-
-        // Stop if we exceed available height
-        if total_height + item_total_height > inner.height {
+        if total_height + item_height > area.height {
             break;
         }
 
-        total_height += item_total_height;
-        messages_with_heights.push((msg.content.clone(), msg.role.clone(), msg_height, need_separator));
+        total_height += item_height;
+        visible_messages.push((&msg.content, &msg.role, msg_height, needs_separator));
     }
 
-    // Reverse to render from oldest to newest (top to bottom)
-    messages_with_heights.reverse();
+    // Render from oldest to newest (top to bottom)
+    visible_messages.reverse();
 
-    let mut current_y = inner.y;
-    for (content, role, msg_height, need_separator) in messages_with_heights.iter() {
-        let msg_area = Rect::new(inner.x, current_y, inner.width, *msg_height);
-
-        let widget = MessageWidget {
-            role: role,
-            content: content,
-            timestamp: "",
-            theme: &app.theme,
-            selected: false,
-        };
-        frame.render_widget(widget, msg_area);
-
+    let mut current_y = area.y;
+    for (content, role, msg_height, needs_separator) in visible_messages {
+        let msg_area = Rect::new(area.x, current_y, area.width, msg_height);
+        frame.render_widget(
+            MessageWidget {
+                role,
+                content,
+                timestamp: "",
+                theme: &app.theme,
+                selected: false,
+            },
+            msg_area,
+        );
         current_y += msg_height;
 
-        if *need_separator && current_y < inner.y + inner.height {
-            let separator_area = Rect::new(inner.x, current_y, inner.width, 1);
-            let separator_line = "─".repeat(inner.width as usize);
-            let separator_para = Paragraph::new(separator_line)
-                .style(app.theme.text_dim());
-            frame.render_widget(separator_para, separator_area);
+        if needs_separator && current_y < area.y + area.height {
+            let separator_area = Rect::new(area.x, current_y, area.width, 1);
+            let separator =
+                Paragraph::new("─".repeat(area.width as usize)).style(app.theme.text_dim());
+            frame.render_widget(separator, separator_area);
             current_y += 1;
         }
     }
 
-    // Show processing indicator after all messages
-    if app.is_processing && current_y < inner.y + inner.height {
-        let spinner_area = Rect::new(inner.x, current_y, inner.width, 1);
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinner_char = frames[app.spinner_frame % frames.len()];
-        let spinner_text = format!(" {} Thinking...", spinner_char);
-        let spinner_para = Paragraph::new(spinner_text)
+    // Show processing indicator
+    if app.is_processing && current_y < area.y + area.height {
+        let spinner_area = Rect::new(area.x, current_y, area.width, 1);
+        let spinner_char = SPINNER_FRAMES[app.spinner_frame % SPINNER_FRAMES.len()];
+        let spinner = Paragraph::new(format!(" {} Thinking...", spinner_char))
             .style(app.theme.text_accent().add_modifier(Modifier::BOLD));
-        frame.render_widget(spinner_para, spinner_area);
+        frame.render_widget(spinner, spinner_area);
     }
+}
+
+/// Render welcome message when no messages exist
+fn render_welcome_message(frame: &mut Frame, app: &App, area: Rect) {
+    let welcome = format!(
+        "Welcome to opencode!\n\n\
+         Model: {}\n\n\
+         Tips:\n\
+         • Type your message and press Enter to send\n\
+         • Use Shift+Enter for multi-line input\n\
+         • Press Ctrl+C to quit",
+        app.model_display
+    );
+    frame.render_widget(
+        Paragraph::new(welcome)
+            .style(app.theme.text_dim())
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Render autocomplete popup

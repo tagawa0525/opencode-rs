@@ -524,29 +524,22 @@ impl App {
 
     /// Handle a tool result - updates progress for batched calls
     pub fn handle_tool_result_grouped(&mut self, id: &str, output: &str, is_error: bool) {
-        let is_in_batch = self.tool_batch.as_ref()
-            .map(|b| b.call_ids.contains(&id.to_string()))
-            .unwrap_or(false);
-
-        if is_in_batch {
-            // Update completed count
-            let (should_clear, tool_name, completed, total) = {
-                if let Some(batch) = &mut self.tool_batch {
-                    batch.completed_count += 1;
-                    let is_complete = batch.completed_count >= batch.total_count;
-                    (is_complete, batch.tool_name.clone(), batch.completed_count, batch.total_count)
-                } else {
-                    (false, String::new(), 0, 0)
-                }
-            };
-
-            // Update display with the extracted values
-            if total > 0 {
-                self.update_tool_batch_display_with(&tool_name, completed, total);
+        let batch_info = self.tool_batch.as_mut().and_then(|batch| {
+            if !batch.call_ids.contains(&id.to_string()) {
+                return None;
             }
+            batch.completed_count += 1;
+            Some((
+                batch.tool_name.clone(),
+                batch.completed_count,
+                batch.total_count,
+                batch.completed_count >= batch.total_count,
+            ))
+        });
 
-            // Clear batch if complete
-            if should_clear {
+        if let Some((tool_name, completed, total, is_complete)) = batch_info {
+            self.update_tool_batch_display_with(&tool_name, completed, total);
+            if is_complete {
                 self.tool_batch = None;
             }
         } else {
@@ -559,52 +552,60 @@ impl App {
             ));
         }
 
-        // Add the tool result part
         self.add_tool_result(id, output, is_error);
     }
 
     /// Update the tool batch display line
     fn update_tool_batch_display(&mut self) {
-        if let Some(batch) = &self.tool_batch {
-            let tool_name = batch.tool_name.clone();
-            let completed = batch.completed_count;
-            let total = batch.total_count;
-            self.update_tool_batch_display_with(&tool_name, completed, total);
-        }
+        let Some(batch) = &self.tool_batch else {
+            return;
+        };
+        let (tool_name, completed, total) = (
+            batch.tool_name.clone(),
+            batch.completed_count,
+            batch.total_count,
+        );
+        self.update_tool_batch_display_with(&tool_name, completed, total);
     }
 
     /// Update the tool batch display line with explicit parameters
     fn update_tool_batch_display_with(&mut self, tool_name: &str, completed: usize, total: usize) {
-        if let Some(msg) = self.messages.last_mut() {
-            if msg.role == "assistant" {
-                // Find and update the last tool call line
-                let lines: Vec<&str> = msg.content.lines().collect();
-                let mut new_lines: Vec<String> = Vec::new();
-                let mut found = false;
+        let Some(msg) = self.messages.last_mut() else {
+            return;
+        };
+        if msg.role != "assistant" {
+            return;
+        }
 
-                for line in lines.iter().rev() {
-                    if !found && line.contains(&format!("[Calling tool: {}", tool_name)) {
-                        // Replace this line with updated progress
-                        if total > 1 {
-                            new_lines.push(format!(
-                                "[Calling tool: {}] ({}/{})",
-                                tool_name, completed, total
-                            ));
-                        } else {
-                            new_lines.push(format!("[Calling tool: {}]", tool_name));
-                        }
-                        found = true;
-                    } else {
-                        new_lines.push(line.to_string());
-                    }
-                }
+        let search_prefix = format!("[Calling tool: {}", tool_name);
+        let replacement = if total > 1 {
+            format!("[Calling tool: {}] ({}/{})", tool_name, completed, total)
+        } else {
+            format!("[Calling tool: {}]", tool_name)
+        };
 
-                new_lines.reverse();
-                msg.content = new_lines.join("\n");
-                if !msg.content.ends_with('\n') {
-                    msg.content.push('\n');
+        // Find and update the last tool call line (searching from end)
+        let new_content: String = msg
+            .content
+            .lines()
+            .rev()
+            .scan(false, |found, line| {
+                if !*found && line.contains(&search_prefix) {
+                    *found = true;
+                    Some(replacement.clone())
+                } else {
+                    Some(line.to_string())
                 }
-            }
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        msg.content = new_content;
+        if !msg.content.ends_with('\n') {
+            msg.content.push('\n');
         }
     }
 

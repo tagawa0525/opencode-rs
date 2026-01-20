@@ -10,6 +10,9 @@ use ratatui::{
 
 use super::theme::Theme;
 
+/// Spinner animation frames (braille pattern)
+pub const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// Header component showing session info and model
 pub struct Header<'a> {
     pub title: &'a str,
@@ -66,27 +69,26 @@ pub struct MessageWidget<'a> {
 
 impl<'a> Widget for MessageWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Set background color based on role
-        let bg_style = match self.role {
-            "user" => Style::default().bg(self.theme.user_bg),
-            _ => Style::default(),
+        let bg_style = if self.role == "user" {
+            Style::default().bg(self.theme.user_bg)
+        } else {
+            Style::default()
         };
 
-        // Apply background to entire area
-        let bg_block = Block::default().style(bg_style);
-        bg_block.render(area, buf);
+        Block::default().style(bg_style).render(area, buf);
 
-        // Render content (trim to remove leading/trailing whitespace and filter empty lines)
-        let trimmed_content = self.content.trim();
-        let content_lines: Vec<Line> = trimmed_content
+        let content_lines: Vec<Line> = self
+            .content
+            .trim()
             .lines()
-            .filter(|line| !line.trim().is_empty()) // Remove empty lines
+            .filter(|line| !line.trim().is_empty())
             .map(|line| Line::from(Span::styled(format!(" {} ", line), self.theme.text())))
             .collect();
 
-        let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false }).style(bg_style);
-
-        paragraph.render(area, buf);
+        Paragraph::new(content_lines)
+            .wrap(Wrap { trim: false })
+            .style(bg_style)
+            .render(area, buf);
     }
 }
 
@@ -103,15 +105,11 @@ pub struct InputBox<'a> {
 
 impl<'a> Widget for InputBox<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Apply user background color to input area
-        let bg_block = Block::default()
-            .style(Style::default().bg(self.theme.user_bg));
-        bg_block.render(area, buf);
+        let bg_style = Style::default().bg(self.theme.user_bg);
+        Block::default().style(bg_style).render(area, buf);
 
         let display_text = if self.is_processing {
-            // Show spinner and processing message when processing
-            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let frame = frames[self.spinner_frame % frames.len()];
+            let frame = SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()];
             Span::styled(
                 format!(" {} Processing...", frame),
                 self.theme.text_accent().add_modifier(Modifier::BOLD),
@@ -122,10 +120,10 @@ impl<'a> Widget for InputBox<'a> {
             Span::styled(self.content, self.theme.text())
         };
 
-        let paragraph = Paragraph::new(display_text)
+        Paragraph::new(display_text)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(self.theme.user_bg));
-        paragraph.render(area, buf);
+            .style(bg_style)
+            .render(area, buf);
     }
 }
 
@@ -174,18 +172,17 @@ pub struct Spinner<'a> {
 
 impl<'a> Widget for Spinner<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let frame = frames[self.frame % frames.len()];
-
+        let frame = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
         let text = if self.message.is_empty() {
             format!(" {}", frame)
         } else {
             format!(" {} {}", frame, self.message)
         };
-        let paragraph = Paragraph::new(text)
+
+        Paragraph::new(text)
             .style(self.theme.text_accent())
-            .alignment(Alignment::Left);
-        paragraph.render(area, buf);
+            .alignment(Alignment::Left)
+            .render(area, buf);
     }
 }
 
