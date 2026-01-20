@@ -99,8 +99,6 @@ pub struct InputBox<'a> {
     pub placeholder: &'a str,
     pub focused: bool,
     pub theme: &'a Theme,
-    pub is_processing: bool,
-    pub spinner_frame: usize,
 }
 
 impl<'a> Widget for InputBox<'a> {
@@ -108,13 +106,8 @@ impl<'a> Widget for InputBox<'a> {
         let bg_style = Style::default().bg(self.theme.user_bg);
         Block::default().style(bg_style).render(area, buf);
 
-        let display_text = if self.is_processing {
-            let frame = SPINNER_FRAMES[self.spinner_frame % SPINNER_FRAMES.len()];
-            Span::styled(
-                format!(" {} Processing...", frame),
-                self.theme.text_accent().add_modifier(Modifier::BOLD),
-            )
-        } else if self.content.is_empty() {
+        // Always show user input, even when processing
+        let display_text = if self.content.is_empty() {
             Span::styled(self.placeholder, self.theme.text_dim())
         } else {
             Span::styled(self.content, self.theme.text())
