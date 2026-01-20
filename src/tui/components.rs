@@ -66,47 +66,24 @@ pub struct MessageWidget<'a> {
 
 impl<'a> Widget for MessageWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let style = match self.role {
-            "user" => self.theme.user(),
-            "assistant" => self.theme.assistant(),
-            "tool" => self.theme.tool(),
-            _ => self.theme.text(),
+        // Set background color based on role
+        let bg_style = match self.role {
+            "user" => Style::default().bg(self.theme.user_bg),
+            _ => Style::default(),
         };
 
-        let role_display = match self.role {
-            "user" => "You",
-            "assistant" => "Assistant",
-            "tool" => "Tool",
-            _ => self.role,
-        };
+        // Apply background to entire area
+        let bg_block = Block::default().style(bg_style);
+        bg_block.render(area, buf);
 
-        let header = Line::from(vec![
-            Span::styled(
-                format!("{} ", role_display),
-                style.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(self.timestamp, self.theme.text_dim()),
-        ]);
-
+        // Render content
         let content_lines: Vec<Line> = self
             .content
             .lines()
-            .map(|line| Line::from(Span::styled(line, self.theme.text())))
+            .map(|line| Line::from(Span::styled(format!(" {} ", line), self.theme.text())))
             .collect();
 
-        let mut lines = vec![header];
-        lines.extend(content_lines);
-        lines.push(Line::from("")); // Spacing
-
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::NONE)
-                .style(if self.selected {
-                    self.theme.selection()
-                } else {
-                    Style::default()
-                }),
-        );
+        let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false }).style(bg_style);
 
         paragraph.render(area, buf);
     }
@@ -123,13 +100,10 @@ pub struct InputBox<'a> {
 
 impl<'a> Widget for InputBox<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(self.theme.border(self.focused))
-            .title(" Message ");
-
-        let inner = block.inner(area);
-        block.render(area, buf);
+        // Apply user background color to input area
+        let bg_block = Block::default()
+            .style(Style::default().bg(self.theme.user_bg));
+        bg_block.render(area, buf);
 
         let display_text = if self.content.is_empty() {
             Span::styled(self.placeholder, self.theme.text_dim())
@@ -137,8 +111,10 @@ impl<'a> Widget for InputBox<'a> {
             Span::styled(self.content, self.theme.text())
         };
 
-        let paragraph = Paragraph::new(display_text).wrap(Wrap { trim: false });
-        paragraph.render(inner, buf);
+        let paragraph = Paragraph::new(display_text)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(self.theme.user_bg));
+        paragraph.render(area, buf);
     }
 }
 

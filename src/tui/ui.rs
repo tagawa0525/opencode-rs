@@ -17,14 +17,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     let theme = &app.theme;
     let size = frame.area();
 
+    // Calculate input height based on content (min 2, max 10 lines)
+    let input_lines = app.input.lines().count().max(1);
+    let input_height = (input_lines as u16 + 1).clamp(2, 10);
+
     // Main layout: Header, Messages, Input, Status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Header
-            Constraint::Min(10),   // Messages
-            Constraint::Length(5), // Input
-            Constraint::Length(1), // Status bar
+            Constraint::Length(1),           // Header
+            Constraint::Min(10),             // Messages
+            Constraint::Length(input_height), // Input (dynamic)
+            Constraint::Length(1),           // Status bar
         ])
         .split(size);
 
@@ -101,13 +105,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(app.theme.border(false))
-        .title(" Chat ");
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = area;
 
     if app.messages.is_empty() {
         // Show welcome message
@@ -140,13 +138,9 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut current_y = inner.y;
     for msg in messages_to_show.iter().rev() {
-        let timestamp = chrono::DateTime::from_timestamp_millis(msg.time_created)
-            .map(|t| t.format("%H:%M").to_string())
-            .unwrap_or_default();
-
         // Calculate height for this message
-        let content_lines = msg.content.lines().count() + 2; // +2 for header and spacing
-        let msg_height = content_lines.min(10) as u16;
+        let content_lines = msg.content.lines().count();
+        let msg_height = content_lines.max(1).min(10) as u16;
 
         if current_y + msg_height > inner.y + inner.height {
             break;
@@ -157,7 +151,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         let widget = MessageWidget {
             role: &msg.role,
             content: &msg.content,
-            timestamp: &timestamp,
+            timestamp: "",
             theme: &app.theme,
             selected: false,
         };
