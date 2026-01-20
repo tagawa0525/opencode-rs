@@ -42,6 +42,8 @@ pub enum DialogType {
     PermissionRequest,
     SessionRename,
     SessionList,
+    Timeline,
+    AgentSelector,
 }
 
 /// Autocomplete state for slash commands

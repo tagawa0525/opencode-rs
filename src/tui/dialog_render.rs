@@ -41,7 +41,9 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
         DialogType::ModelSelector
         | DialogType::ProviderSelector
         | DialogType::AuthMethodSelector
-        | DialogType::SessionList => {
+        | DialogType::SessionList
+        | DialogType::Timeline
+        | DialogType::AgentSelector => {
             render_select_dialog(frame, dialog, theme, inner);
         }
         DialogType::ApiKeyInput => {

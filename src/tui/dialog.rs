@@ -145,6 +145,90 @@ impl App {
         Ok(())
     }
 
+    /// Open agent selector dialog
+    pub async fn open_agent_selector(&mut self) -> Result<()> {
+        use crate::config::Config;
+
+        // Load config to get agent definitions
+        let config = Config::load().await?;
+
+        let items: Vec<SelectItem> = if let Some(agents) = config.agent {
+            agents
+                .into_iter()
+                .filter(|(_, agent_config)| !agent_config.disable.unwrap_or(false))
+                .filter(|(_, agent_config)| !agent_config.hidden.unwrap_or(false))
+                .map(|(name, agent_config)| SelectItem {
+                    id: name.clone(),
+                    label: name.clone(),
+                    description: agent_config.description.or(agent_config.model),
+                    provider_id: None,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        if items.is_empty() {
+            self.add_message(
+                "system",
+                "No agents configured. Define agents in your opencode.json config file.",
+            );
+            return Ok(());
+        }
+
+        let dialog = DialogState::new(DialogType::AgentSelector, "Select Agent")
+            .with_items(items)
+            .with_message("Select an agent to use");
+        self.dialog = Some(dialog);
+
+        Ok(())
+    }
+
+    /// Open timeline dialog (message history)
+    pub fn open_timeline(&mut self) {
+        let items: Vec<SelectItem> = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(idx, msg)| {
+                let role_display = match msg.role.as_str() {
+                    "user" => "👤 User",
+                    "assistant" => "🤖 Assistant",
+                    "system" => "⚙️  System",
+                    _ => &msg.role,
+                };
+
+                // Get first line of content for preview
+                let preview = msg
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>();
+
+                let preview = if msg.content.len() > 60 {
+                    format!("{}...", preview)
+                } else {
+                    preview
+                };
+
+                SelectItem {
+                    id: idx.to_string(),
+                    label: format!("{}: {}", role_display, preview),
+                    description: Some(format!("Message {}/{}", idx + 1, self.messages.len())),
+                    provider_id: None,
+                }
+            })
+            .collect();
+
+        let dialog = DialogState::new(DialogType::Timeline, "Message Timeline")
+            .with_items(items)
+            .with_message("Select a message to view");
+        self.dialog = Some(dialog);
+    }
+
     /// Open auth method selector for a provider
     pub fn open_auth_method_selector(&mut self, provider_id: &str) {
         let items = match get_auth_method_items(provider_id) {
@@ -312,6 +396,41 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
                 app.add_message("system", &format!("Switched to session: {}", session.title));
             }
 
+            app.close_dialog();
+        }
+        DialogType::AgentSelector => {
+            // Switch to the selected agent
+            // TODO: Implement full agent system with prompts and configurations
+            app.status = format!(
+                "Agent switching to '{}' - agent system under development",
+                item_id
+            );
+            app.add_message(
+                "system",
+                &format!(
+                    "Note: Agent '{}' selected, but agent system is not yet fully implemented",
+                    item_id
+                ),
+            );
+            app.close_dialog();
+        }
+        DialogType::Timeline => {
+            // Parse the message index from the item ID
+            if let Ok(msg_index) = item_id.parse::<usize>() {
+                if let Some(msg) = app.messages.get(msg_index) {
+                    // Display the full message content
+                    app.add_message(
+                        "system",
+                        &format!(
+                            "Message {}/{} ({})\n\n{}",
+                            msg_index + 1,
+                            app.messages.len(),
+                            msg.role,
+                            msg.content
+                        ),
+                    );
+                }
+            }
             app.close_dialog();
         }
         _ => {}
@@ -575,7 +694,9 @@ pub async fn handle_dialog_input(
     match dialog_type {
         Some(DialogType::ModelSelector)
         | Some(DialogType::ProviderSelector)
-        | Some(DialogType::SessionList) => {
+        | Some(DialogType::SessionList)
+        | Some(DialogType::Timeline)
+        | Some(DialogType::AgentSelector) => {
             handle_selector_input(app, key.code).await?;
         }
         Some(DialogType::ApiKeyInput) => {

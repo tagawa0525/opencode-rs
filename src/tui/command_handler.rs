@@ -37,8 +37,8 @@ pub async fn handle_command_output(
     }
 
     // Handle agent switch
-    if output.agent.is_some() {
-        app.status = "Agent switching not yet implemented".to_string();
+    if let Some(agent_name) = &output.agent {
+        handle_agent_switch(app, agent_name);
         return Ok(());
     }
 
@@ -74,7 +74,9 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
         CommandAction::Export => handle_export_transcript(app),
 
         // Unimplemented actions with messages
-        CommandAction::OpenAgentSelector => show_not_implemented(app, "Agent selector"),
+        CommandAction::OpenAgentSelector => {
+            app.open_agent_selector().await?;
+        }
         CommandAction::OpenSessionList => {
             app.open_session_list().await?;
         }
@@ -108,16 +110,35 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
                 app.add_message("system", "Nothing to redo");
             }
         }
-        CommandAction::Compact => show_not_implemented(app, "Session compaction"),
-        CommandAction::Unshare => show_not_implemented(app, "Session sharing"),
+        CommandAction::Compact => {
+            // Note: /compact command already works by sending a prompt to LLM
+            // This action is not used by the current implementation
+            app.add_message("system", "Use /compact command to summarize the session");
+        }
+        CommandAction::Unshare => {
+            app.add_message(
+                "system",
+                "Session sharing features are under development. This requires server-side API implementation.",
+            );
+        }
         CommandAction::Rename => app.open_session_rename(),
-        CommandAction::Timeline => show_not_implemented(app, "Timeline dialog"),
+        CommandAction::Timeline => app.open_timeline(),
         CommandAction::Fork => {
             handle_fork_session(app).await?;
         }
-        CommandAction::Share => show_not_implemented(app, "Session sharing"),
-        CommandAction::ToggleMcp => show_not_implemented(app, "MCP toggle dialog"),
-        CommandAction::OpenEditor => show_not_implemented(app, "External editor"),
+        CommandAction::Share => {
+            app.add_message(
+                "system",
+                "Session sharing features are under development. This requires server-side API implementation.",
+            );
+        }
+        CommandAction::ToggleMcp => {
+            app.add_message(
+                "system",
+                "MCP server management dialog is under development. For now, configure MCPs in your opencode.json file.",
+            );
+        }
+        CommandAction::OpenEditor => handle_open_editor(app)?,
         CommandAction::ShowCommands => {
             app.add_message("system", "Use /help to see all available commands")
         }
@@ -126,6 +147,7 @@ async fn handle_action(app: &mut App, action: &CommandAction) -> Result<()> {
 }
 
 /// Show "not yet implemented" message for an action
+#[allow(dead_code)]
 fn show_not_implemented(app: &mut App, feature: &str) {
     app.add_message("system", &format!("{} not yet implemented", feature));
 }
@@ -242,6 +264,23 @@ fn handle_model_switch(app: &mut App, model: &str) {
     }
 }
 
+/// Handle agent switch command
+fn handle_agent_switch(app: &mut App, agent_name: &str) {
+    // TODO: Implement full agent system with prompts and configurations
+    // For now, just store the agent name and notify the user
+    app.status = format!(
+        "Agent switching to '{}' - agent system under development",
+        agent_name
+    );
+    app.add_message(
+        "system",
+        &format!(
+            "Note: Agent '{}' selected, but agent system is not yet fully implemented",
+            agent_name
+        ),
+    );
+}
+
 /// Start streaming LLM response
 fn start_llm_response(app: &mut App, prompt: &str, event_tx: mpsc::Sender<AppEvent>) {
     app.is_processing = true;
@@ -285,6 +324,65 @@ async fn process_stream_events(
             let _ = event_tx.send(evt).await;
         }
     }
+}
+
+/// Handle opening external editor
+fn handle_open_editor(app: &mut App) -> Result<()> {
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::Write;
+
+    // Get editor from environment
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    // Create temp file with current input
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("opencode-edit-{}.txt", std::process::id()));
+
+    {
+        let mut file = std::fs::File::create(&temp_file)?;
+        file.write_all(app.input.as_bytes())?;
+    }
+
+    // Disable raw mode temporarily
+    disable_raw_mode()?;
+
+    // Open editor
+    let status = std::process::Command::new(&editor).arg(&temp_file).status();
+
+    // Re-enable raw mode
+    enable_raw_mode()?;
+
+    match status {
+        Ok(exit_status) if exit_status.success() => {
+            // Read file content
+            match std::fs::read_to_string(&temp_file) {
+                Ok(content) => {
+                    app.input = content;
+                    app.cursor_position = app.input.len();
+                    app.add_message("system", "Editor content loaded");
+                }
+                Err(e) => {
+                    app.add_message("system", &format!("Failed to read editor file: {}", e));
+                }
+            }
+        }
+        Ok(_) => {
+            app.add_message("system", "Editor exited with error");
+        }
+        Err(e) => {
+            app.add_message(
+                "system",
+                &format!("Failed to open editor '{}': {}", editor, e),
+            );
+        }
+    }
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+
+    Ok(())
 }
 
 /// Handle session forking
