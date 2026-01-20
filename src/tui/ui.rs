@@ -11,6 +11,7 @@ use ratatui::{
 use super::app::{App, AutocompleteState};
 use super::components::{Header, InputBox, MessageWidget, Spinner, StatusBar};
 use super::dialog_render::render_dialog;
+use super::types::DisplayMessage;
 
 /// Main UI rendering function
 pub fn render(frame: &mut Frame, app: &App) {
@@ -111,38 +112,57 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Calculate total height needed
-    let max_y = inner.height as usize;
+    // First, calculate which messages need separators
+    let messages_vec: Vec<_> = app.messages.iter().collect();
+    let mut need_separators: Vec<bool> = Vec::new();
 
-    // Render messages from bottom to top (newest first visible)
-    let messages_to_show: Vec<_> = app
-        .messages
-        .iter()
-        .rev()
-        .take(max_y) // Take at most max_y messages
-        .collect();
+    for i in 0..messages_vec.len() {
+        // Check if separator is needed after this message (between this and next message chronologically)
+        let need_sep = if i + 1 < messages_vec.len() {
+            messages_vec[i].role != messages_vec[i + 1].role
+        } else {
+            false // No separator after last message
+        };
+        need_separators.push(need_sep);
+    }
 
-    let mut current_y = inner.y;
-    let messages_vec: Vec<_> = messages_to_show.iter().rev().collect();
+    // Render messages from newest to oldest, calculating heights
+    let mut messages_with_heights: Vec<(String, String, u16, bool)> = Vec::new();
+    let mut total_height = 0u16;
 
-    for (idx, msg) in messages_vec.iter().enumerate() {
-        // Calculate height for this message (trim and filter empty lines)
+    for (idx, msg) in messages_vec.iter().rev().enumerate() {
+        let msg_index = messages_vec.len() - 1 - idx;
+
         let content_lines = msg.content
             .trim()
             .lines()
             .filter(|line| !line.trim().is_empty())
             .count();
-        let msg_height = content_lines.max(1).min(10) as u16;
+        let msg_height = content_lines.max(1) as u16;
 
-        if current_y + msg_height > inner.y + inner.height {
+        let need_separator = need_separators[msg_index];
+        let separator_height = if need_separator { 1 } else { 0 };
+        let item_total_height = msg_height + separator_height;
+
+        // Stop if we exceed available height
+        if total_height + item_total_height > inner.height {
             break;
         }
 
-        let msg_area = Rect::new(inner.x, current_y, inner.width, msg_height);
+        total_height += item_total_height;
+        messages_with_heights.push((msg.content.clone(), msg.role.clone(), msg_height, need_separator));
+    }
+
+    // Reverse to render from oldest to newest (top to bottom)
+    messages_with_heights.reverse();
+
+    let mut current_y = inner.y;
+    for (content, role, msg_height, need_separator) in messages_with_heights.iter() {
+        let msg_area = Rect::new(inner.x, current_y, inner.width, *msg_height);
 
         let widget = MessageWidget {
-            role: &msg.role,
-            content: &msg.content,
+            role: role,
+            content: content,
             timestamp: "",
             theme: &app.theme,
             selected: false,
@@ -151,16 +171,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
         current_y += msg_height;
 
-        // Check if we need separator after this message
-        // Add separator when role changes (user->assistant or assistant->user)
-        let need_separator = if idx + 1 < messages_vec.len() {
-            let next_msg = messages_vec[idx + 1];
-            msg.role != next_msg.role
-        } else {
-            false // No separator after last message
-        };
-
-        if need_separator && current_y < inner.y + inner.height {
+        if *need_separator && current_y < inner.y + inner.height {
             let separator_area = Rect::new(inner.x, current_y, inner.width, 1);
             let separator_line = "─".repeat(inner.width as usize);
             let separator_para = Paragraph::new(separator_line)
