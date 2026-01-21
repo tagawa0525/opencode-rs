@@ -507,7 +507,7 @@ async fn calculate_batch_size(ctx: &ToolContext) -> usize {
             let batch_size = (usable_context / AVG_TOKENS_PER_TOOL_RESULT) as usize;
 
             // Clamp to min/max bounds
-            let clamped = batch_size.max(MIN_BATCH_SIZE).min(MAX_BATCH_SIZE);
+            let clamped = batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
 
             tracing::debug!(
                 "Model {} context: {}, usable: {}, calculated batch size: {} (clamped: {})",
