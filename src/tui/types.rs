@@ -44,6 +44,7 @@ pub enum DialogType {
     SessionList,
     Timeline,
     AgentSelector,
+    Question,
 }
 
 /// Autocomplete state for slash commands
@@ -114,6 +115,30 @@ pub struct PermissionRequest {
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
+/// Question request from tool execution
+#[derive(Debug, Clone)]
+pub struct QuestionRequest {
+    pub id: String,
+    pub questions: Vec<QuestionInfo>,
+}
+
+/// Single question information
+#[derive(Debug, Clone)]
+pub struct QuestionInfo {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multiple: bool,
+    pub custom: bool,
+}
+
+/// Question option
+#[derive(Debug, Clone)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
 /// Dialog state for selection dialogs
 #[derive(Debug, Clone)]
 pub struct DialogState {
@@ -133,6 +158,18 @@ pub struct DialogState {
     pub permission_request: Option<PermissionRequest>,
     /// Selected permission option index (0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject)
     pub selected_permission_option: usize,
+    /// For question requests
+    pub question_request: Option<QuestionRequest>,
+    /// Answers for each question (array of arrays)
+    pub question_answers: Vec<Vec<String>>,
+    /// Current question index (for multi-question mode)
+    pub current_question_index: usize,
+    /// Current option index (for navigation)
+    pub current_option_index: usize,
+    /// Custom answer input text
+    pub custom_answer_input: String,
+    /// Whether we're editing custom answer
+    pub is_editing_custom: bool,
 }
 
 impl DialogState {
@@ -151,6 +188,12 @@ impl DialogState {
             verification_uri: None,
             permission_request: None,
             selected_permission_option: 0,
+            question_request: None,
+            question_answers: Vec::new(),
+            current_question_index: 0,
+            current_option_index: 0,
+            custom_answer_input: String::new(),
+            is_editing_custom: false,
         }
     }
 
@@ -162,6 +205,15 @@ impl DialogState {
 
     pub fn with_message(mut self, message: &str) -> Self {
         self.message = Some(message.to_string());
+        self
+    }
+
+    pub fn with_question_request(mut self, request: QuestionRequest) -> Self {
+        // Initialize answers array with empty vectors for each question
+        self.question_answers = vec![Vec::new(); request.questions.len()];
+        self.question_request = Some(request);
+        self.current_question_index = 0;
+        self.current_option_index = 0;
         self
     }
 
@@ -254,6 +306,11 @@ pub enum AppEvent {
         id: String,
         allow: bool,
         scope: crate::tool::PermissionScope,
+    },
+    QuestionRequested(QuestionRequest),
+    QuestionReplied {
+        id: String,
+        answers: Vec<Vec<String>>,
     },
     // OAuth events
     DeviceCodeReceived {

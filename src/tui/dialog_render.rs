@@ -64,6 +64,9 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
         DialogType::PermissionRequest => {
             render_permission_dialog(frame, dialog, theme, inner);
         }
+        DialogType::Question => {
+            render_question_dialog(frame, dialog, theme, inner);
+        }
         DialogType::None => {}
     }
 }
@@ -532,4 +535,182 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
     .style(Style::default().fg(theme.dim))
     .alignment(Alignment::Center);
     frame.render_widget(help, chunks[7]);
+}
+
+/// Render question dialog
+fn render_question_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
+    let request = match &dialog.question_request {
+        Some(req) => req,
+        None => return,
+    };
+
+    let question_count = request.questions.len();
+    let current_idx = dialog.current_question_index;
+    let current_question = &request.questions[current_idx];
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Question tabs (if multi-question)
+            Constraint::Length(1), // Spacer
+            Constraint::Length(2), // Question text
+            Constraint::Length(1), // Spacer
+            Constraint::Min(5),    // Options
+            Constraint::Length(3), // Custom input (if editing)
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    // Question tabs (if multiple questions)
+    if question_count > 1 {
+        let mut tab_spans = vec![];
+        for (idx, q) in request.questions.iter().enumerate() {
+            let is_current = idx == current_idx;
+            let has_answer = !dialog.question_answers[idx].is_empty();
+
+            let indicator = if has_answer { " ✓" } else { "" };
+            let tab_text = format!(" {}{} ", q.header, indicator);
+
+            let style = if is_current {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else if has_answer {
+                Style::default().fg(theme.success)
+            } else {
+                Style::default().fg(theme.dim)
+            };
+
+            tab_spans.push(Span::styled(tab_text, style));
+            if idx + 1 < question_count {
+                tab_spans.push(Span::raw(" "));
+            }
+        }
+
+        let tabs = Paragraph::new(Line::from(tab_spans)).alignment(Alignment::Center);
+        frame.render_widget(tabs, chunks[0]);
+    }
+
+    // Question text
+    let question_text = if current_question.multiple {
+        format!("{} (select all that apply)", current_question.question)
+    } else {
+        current_question.question.clone()
+    };
+
+    let question_widget = Paragraph::new(question_text)
+        .style(
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    frame.render_widget(question_widget, chunks[2]);
+
+    // Options list
+    let mut option_items: Vec<ListItem> = vec![];
+    for (idx, option) in current_question.options.iter().enumerate() {
+        let is_selected = dialog.current_option_index == idx;
+        let is_answered = dialog.question_answers[current_idx]
+            .iter()
+            .any(|a| a == &option.label);
+
+        let checkbox = if current_question.multiple {
+            if is_answered {
+                "[✓] "
+            } else {
+                "[ ] "
+            }
+        } else if is_answered {
+            "(•) "
+        } else {
+            "( ) "
+        };
+
+        let number = format!("{}. ", idx + 1);
+        let content = format!("{}{}{}", number, checkbox, option.label);
+
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.background)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else if is_answered {
+            Style::default().fg(theme.success)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        let mut lines = vec![Line::from(Span::styled(content, style))];
+
+        // Add description
+        if !option.description.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", option.description),
+                Style::default().fg(theme.dim),
+            )));
+        }
+
+        option_items.push(ListItem::new(lines));
+    }
+
+    // Custom answer option
+    if current_question.custom {
+        let custom_idx = current_question.options.len();
+        let is_selected = dialog.current_option_index == custom_idx;
+        let content = format!("{}. Type your own answer", custom_idx + 1);
+
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.background)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        option_items.push(ListItem::new(Line::from(Span::styled(content, style))));
+    }
+
+    let options_list = List::new(option_items);
+    frame.render_widget(options_list, chunks[4]);
+
+    // Custom answer input (if editing)
+    if dialog.is_editing_custom {
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.accent))
+            .title(" Custom Answer ");
+
+        let inner_input = input_block.inner(chunks[5]);
+        frame.render_widget(input_block, chunks[5]);
+
+        let display_text = if dialog.custom_answer_input.is_empty() {
+            Span::styled("Type your answer...", Style::default().fg(theme.dim))
+        } else {
+            Span::styled(
+                &dialog.custom_answer_input,
+                Style::default().fg(theme.foreground),
+            )
+        };
+
+        let input = Paragraph::new(display_text);
+        frame.render_widget(input, inner_input);
+    }
+
+    // Help text
+    let help_text = if dialog.is_editing_custom {
+        "Enter: Confirm | Esc: Cancel"
+    } else if question_count > 1 {
+        "Up/Down: Navigate | Enter/Space: Select | Tab: Next | S: Submit | Esc: Cancel"
+    } else {
+        "Up/Down: Navigate | Enter/Space: Select | S: Submit | Esc: Cancel"
+    };
+
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(theme.dim))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[6]);
 }

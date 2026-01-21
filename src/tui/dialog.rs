@@ -293,6 +293,13 @@ impl App {
         }];
         self.dialog = Some(dialog);
     }
+
+    /// Open question dialog
+    pub fn open_question_dialog(&mut self, request: super::types::QuestionRequest) {
+        let dialog =
+            DialogState::new(DialogType::Question, "Question").with_question_request(request);
+        self.dialog = Some(dialog);
+    }
 }
 
 // ============================================================================
@@ -704,6 +711,180 @@ async fn handle_permission_input(
     Ok(())
 }
 
+/// Handle input for question dialog
+async fn handle_question_input(
+    app: &mut App,
+    key_code: KeyCode,
+    event_tx: &mpsc::Sender<AppEvent>,
+) -> Result<()> {
+    let dialog = match &mut app.dialog {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+
+    let question_request = match &dialog.question_request {
+        Some(req) => req.clone(),
+        None => return Ok(()),
+    };
+
+    let question_count = question_request.questions.len();
+    let current_q_idx = dialog.current_question_index;
+    let current_question = &question_request.questions[current_q_idx];
+
+    // Handle custom answer editing mode
+    if dialog.is_editing_custom {
+        match key_code {
+            KeyCode::Esc => {
+                dialog.is_editing_custom = false;
+                dialog.custom_answer_input.clear();
+            }
+            KeyCode::Enter => {
+                // Add custom answer
+                let custom_answer = dialog.custom_answer_input.trim().to_string();
+                if !custom_answer.is_empty() {
+                    dialog.question_answers[current_q_idx].push(custom_answer);
+                }
+                dialog.is_editing_custom = false;
+                dialog.custom_answer_input.clear();
+            }
+            KeyCode::Char(c) => {
+                dialog.custom_answer_input.push(c);
+            }
+            KeyCode::Backspace => {
+                dialog.custom_answer_input.pop();
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // Normal navigation mode
+    match key_code {
+        KeyCode::Esc => {
+            // Cancel the question
+            app.close_dialog();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if dialog.current_option_index > 0 {
+                dialog.current_option_index -= 1;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            let max_options =
+                current_question.options.len() + if current_question.custom { 1 } else { 0 };
+            if dialog.current_option_index + 1 < max_options {
+                dialog.current_option_index += 1;
+            }
+        }
+        KeyCode::Tab => {
+            // Next question
+            if current_q_idx + 1 < question_count {
+                dialog.current_question_index += 1;
+                dialog.current_option_index = 0;
+            }
+        }
+        KeyCode::BackTab => {
+            // Previous question
+            if current_q_idx > 0 {
+                dialog.current_question_index -= 1;
+                dialog.current_option_index = 0;
+            }
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            // Number selection (1-9)
+            if let Some(digit) = c.to_digit(10) {
+                let option_idx = (digit as usize).saturating_sub(1);
+                if option_idx < current_question.options.len() {
+                    toggle_answer(dialog, current_q_idx, option_idx, current_question.multiple);
+                }
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            let opt_idx = dialog.current_option_index;
+
+            // Check if selecting custom answer
+            if current_question.custom && opt_idx == current_question.options.len() {
+                dialog.is_editing_custom = true;
+                dialog.custom_answer_input.clear();
+            } else if opt_idx < current_question.options.len() {
+                // Toggle the selected option
+                toggle_answer(dialog, current_q_idx, opt_idx, current_question.multiple);
+
+                // For single-select on last question or single question, auto-submit
+                if !current_question.multiple
+                    && current_q_idx + 1 == question_count
+                    && question_count == 1
+                {
+                    // Single question, single select - submit immediately
+                    submit_answers(app, event_tx, &question_request).await?;
+                } else if !current_question.multiple && current_q_idx + 1 < question_count {
+                    // Multi-question, move to next
+                    dialog.current_question_index += 1;
+                    dialog.current_option_index = 0;
+                }
+            }
+        }
+        KeyCode::Char('c') if current_question.custom => {
+            // Shortcut to enter custom answer
+            dialog.is_editing_custom = true;
+            dialog.custom_answer_input.clear();
+        }
+        KeyCode::Char('s') => {
+            // Submit answers
+            submit_answers(app, event_tx, &question_request).await?;
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+/// Toggle an answer selection
+fn toggle_answer(dialog: &mut DialogState, question_idx: usize, option_idx: usize, multiple: bool) {
+    let question_request = match &dialog.question_request {
+        Some(req) => req,
+        None => return,
+    };
+
+    let current_question = &question_request.questions[question_idx];
+    let option_label = current_question.options[option_idx].label.clone();
+
+    let answers = &mut dialog.question_answers[question_idx];
+
+    if multiple {
+        // Multi-select: toggle
+        if let Some(pos) = answers.iter().position(|a| a == &option_label) {
+            answers.remove(pos);
+        } else {
+            answers.push(option_label);
+        }
+    } else {
+        // Single-select: replace
+        *answers = vec![option_label];
+    }
+}
+
+/// Submit all answers
+async fn submit_answers(
+    app: &mut App,
+    event_tx: &mpsc::Sender<AppEvent>,
+    question_request: &super::types::QuestionRequest,
+) -> Result<()> {
+    let (id, answers) = {
+        let dialog = match &app.dialog {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        (question_request.id.clone(), dialog.question_answers.clone())
+    };
+
+    app.close_dialog();
+    let _ = event_tx
+        .send(AppEvent::QuestionReplied { id, answers })
+        .await;
+    Ok(())
+}
+
 /// Handle input when a dialog is open
 pub async fn handle_dialog_input(
     app: &mut App,
@@ -738,6 +919,9 @@ pub async fn handle_dialog_input(
         }
         DialogType::PermissionRequest => {
             handle_permission_input(app, key.code, &event_tx).await?;
+        }
+        DialogType::Question => {
+            handle_question_input(app, key.code, &event_tx).await?;
         }
         DialogType::None => {
             if key.code == KeyCode::Esc {

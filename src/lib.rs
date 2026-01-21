@@ -9,6 +9,7 @@ pub mod oauth;
 pub mod permission;
 pub mod permission_state;
 pub mod provider;
+pub mod question_state;
 pub mod session;
 pub mod slash_command;
 pub mod storage;

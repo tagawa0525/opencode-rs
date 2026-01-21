@@ -21,6 +21,11 @@ pub async fn send_permission_response(id: String, allow: bool, scope: tool::Perm
     crate::permission_state::send_permission_response(id, allow, scope).await;
 }
 
+/// Send question response to waiting tool
+pub async fn send_question_response(id: String, answers: Vec<Vec<String>>) {
+    crate::question_state::send_question_response(id, answers).await;
+}
+
 /// Context for streaming operations
 struct StreamContext {
     provider_id: String,
@@ -136,12 +141,14 @@ async fn initialize_stream_context(
     // Create TUI permission handler using shared implementation
     let permission_handler =
         crate::permission_state::create_tui_permission_handler(event_tx.clone());
+    let question_handler = crate::question_state::create_tui_question_handler(event_tx.clone());
 
     let tool_ctx = Arc::new(
         ToolContext::new("", "", "tui")
             .with_cwd(cwd.clone())
             .with_root(cwd.clone())
-            .with_permission_handler(permission_handler),
+            .with_permission_handler(permission_handler)
+            .with_question_handler(question_handler),
     );
 
     // Generate system prompt
@@ -338,7 +345,6 @@ async fn handle_tool_calls(
 
     Ok(true)
 }
-
 
 /// Execute approved tools
 async fn execute_tools(

@@ -73,6 +73,44 @@ pub type PermissionHandler = std::sync::Arc<
     dyn Fn(PermissionRequest) -> tokio::sync::oneshot::Receiver<PermissionResponse> + Send + Sync,
 >;
 
+/// Question request for interactive prompts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionRequest {
+    pub id: String,
+    pub questions: Vec<QuestionInfo>,
+}
+
+/// Single question information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionInfo {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    #[serde(default)]
+    pub multiple: bool,
+    #[serde(default = "default_custom")]
+    pub custom: bool,
+}
+
+fn default_custom() -> bool {
+    true
+}
+
+/// Question option
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// Question response type - array of answer arrays (one per question)
+pub type QuestionResponse = Vec<Vec<String>>;
+
+/// Question handler type
+pub type QuestionHandler = std::sync::Arc<
+    dyn Fn(QuestionRequest) -> tokio::sync::oneshot::Receiver<QuestionResponse> + Send + Sync,
+>;
+
 /// Tool definition that can be sent to the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -103,6 +141,8 @@ pub struct ToolContext {
     pub extra: HashMap<String, Value>,
     /// Permission handler
     pub permission_handler: Option<PermissionHandler>,
+    /// Question handler
+    pub question_handler: Option<QuestionHandler>,
 }
 
 impl ToolContext {
@@ -120,6 +160,7 @@ impl ToolContext {
                 .unwrap_or_else(|_| ".".to_string()),
             extra: HashMap::new(),
             permission_handler: None,
+            question_handler: None,
         }
     }
 
@@ -140,6 +181,11 @@ impl ToolContext {
 
     pub fn with_permission_handler(mut self, handler: PermissionHandler) -> Self {
         self.permission_handler = Some(handler);
+        self
+    }
+
+    pub fn with_question_handler(mut self, handler: QuestionHandler) -> Self {
+        self.question_handler = Some(handler);
         self
     }
 
@@ -173,6 +219,25 @@ impl ToolContext {
         } else {
             // No permission handler, default to deny for safety
             Ok(false)
+        }
+    }
+
+    /// Ask user questions and get answers
+    pub async fn ask_question(&self, questions: Vec<QuestionInfo>) -> Result<QuestionResponse> {
+        if let Some(handler) = &self.question_handler {
+            let request = QuestionRequest {
+                id: uuid::Uuid::new_v4().to_string(),
+                questions,
+            };
+
+            let rx = handler(request);
+            match rx.await {
+                Ok(response) => Ok(response),
+                Err(_) => anyhow::bail!("Question request cancelled"),
+            }
+        } else {
+            // No question handler, return empty answers
+            anyhow::bail!("Question handler not available")
         }
     }
 }

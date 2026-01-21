@@ -114,20 +114,33 @@ impl Tool for QuestionTool {
         }
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let params: QuestionParams = serde_json::from_value(args)?;
 
-        // TODO: Implement actual user interaction through event bus
-        // For now, return a placeholder that explains the feature is not yet implemented
+        // Convert QuestionParams to the tool::QuestionInfo format
+        let questions: Vec<crate::tool::QuestionInfo> = params
+            .questions
+            .iter()
+            .map(|q| crate::tool::QuestionInfo {
+                question: q.question.clone(),
+                header: q.header.clone(),
+                options: q
+                    .options
+                    .iter()
+                    .map(|o| crate::tool::QuestionOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                    })
+                    .collect(),
+                multiple: q.multiple,
+                custom: q.custom,
+            })
+            .collect();
 
-        // In the TypeScript version, this would:
-        // 1. Publish a question.asked event with the questions
-        // 2. Wait for a question.replied event with the answers
-        // 3. Return the answers to the LLM
+        // Ask the questions through the handler
+        let answers = ctx.ask_question(questions).await?;
 
-        // For now, we'll return empty answers as a placeholder
-        let answers: Vec<Vec<String>> = params.questions.iter().map(|_| Vec::new()).collect();
-
+        // Format the response
         let formatted = params
             .questions
             .iter()
@@ -145,10 +158,6 @@ impl Tool for QuestionTool {
 
         let mut metadata = HashMap::new();
         metadata.insert("answers".to_string(), serde_json::to_value(&answers)?);
-        metadata.insert(
-            "note".to_string(),
-            Value::String("Question tool not yet fully implemented in Rust version".to_string()),
-        );
 
         let question_count = params.questions.len();
         Ok(ToolResult {
@@ -158,8 +167,7 @@ impl Tool for QuestionTool {
                 if question_count > 1 { "s" } else { "" }
             ),
             output: format!(
-                "User has answered your questions: {}. You can now continue with the user's answers in mind.\n\n\
-                Note: The question tool is not yet fully implemented. Interactive question prompts will be added in a future update.",
+                "User has answered your questions: {}. You can now continue with the user's answers in mind.",
                 formatted
             ),
             metadata,
