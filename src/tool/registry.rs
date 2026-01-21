@@ -64,10 +64,7 @@ impl ToolRegistry {
             "webfetch".to_string(),
             Arc::new(WebFetchTool) as Arc<dyn Tool>,
         );
-        tools.insert(
-            "batch".to_string(),
-            Arc::new(BatchTool) as Arc<dyn Tool>,
-        );
+        tools.insert("batch".to_string(), Arc::new(BatchTool) as Arc<dyn Tool>);
 
         Self {
             tools: RwLock::new(tools),

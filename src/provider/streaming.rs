@@ -280,7 +280,10 @@ impl StreamingClient {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
                     let _ = tx_clone
-                        .send(StreamEvent::Error(format!("Failed to serialize request: {}", e)))
+                        .send(StreamEvent::Error(format!(
+                            "Failed to serialize request: {}",
+                            e
+                        )))
                         .await;
                 });
                 return Ok(rx);
