@@ -5,6 +5,7 @@
 //! the environment (read files, execute commands, etc.).
 
 mod bash;
+mod batch;
 mod edit;
 mod executor;
 mod glob;
@@ -18,6 +19,7 @@ mod webfetch;
 mod write;
 
 pub use bash::BashTool;
+pub use batch::BatchTool;
 pub use edit::EditTool;
 pub use executor::*;
 pub use glob::GlobTool;
