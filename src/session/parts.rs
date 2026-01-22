@@ -42,56 +42,37 @@ pub enum Part {
     Patch(PatchPart),
 }
 
+/// Macro to access a base field from any Part variant
+macro_rules! part_base_field {
+    ($self:expr, $field:ident) => {
+        match $self {
+            Part::Text(p) => &p.base.$field,
+            Part::Reasoning(p) => &p.base.$field,
+            Part::File(p) => &p.base.$field,
+            Part::Tool(p) => &p.base.$field,
+            Part::StepStart(p) => &p.base.$field,
+            Part::StepFinish(p) => &p.base.$field,
+            Part::Subtask(p) => &p.base.$field,
+            Part::Compaction(p) => &p.base.$field,
+            Part::Retry(p) => &p.base.$field,
+            Part::Agent(p) => &p.base.$field,
+            Part::Snapshot(p) => &p.base.$field,
+            Part::Patch(p) => &p.base.$field,
+        }
+    };
+}
+
 impl Part {
     pub fn id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.id,
-            Part::Reasoning(p) => &p.base.id,
-            Part::File(p) => &p.base.id,
-            Part::Tool(p) => &p.base.id,
-            Part::StepStart(p) => &p.base.id,
-            Part::StepFinish(p) => &p.base.id,
-            Part::Subtask(p) => &p.base.id,
-            Part::Compaction(p) => &p.base.id,
-            Part::Retry(p) => &p.base.id,
-            Part::Agent(p) => &p.base.id,
-            Part::Snapshot(p) => &p.base.id,
-            Part::Patch(p) => &p.base.id,
-        }
+        part_base_field!(self, id)
     }
 
     pub fn message_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.message_id,
-            Part::Reasoning(p) => &p.base.message_id,
-            Part::File(p) => &p.base.message_id,
-            Part::Tool(p) => &p.base.message_id,
-            Part::StepStart(p) => &p.base.message_id,
-            Part::StepFinish(p) => &p.base.message_id,
-            Part::Subtask(p) => &p.base.message_id,
-            Part::Compaction(p) => &p.base.message_id,
-            Part::Retry(p) => &p.base.message_id,
-            Part::Agent(p) => &p.base.message_id,
-            Part::Snapshot(p) => &p.base.message_id,
-            Part::Patch(p) => &p.base.message_id,
-        }
+        part_base_field!(self, message_id)
     }
 
     pub fn session_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.session_id,
-            Part::Reasoning(p) => &p.base.session_id,
-            Part::File(p) => &p.base.session_id,
-            Part::Tool(p) => &p.base.session_id,
-            Part::StepStart(p) => &p.base.session_id,
-            Part::StepFinish(p) => &p.base.session_id,
-            Part::Subtask(p) => &p.base.session_id,
-            Part::Compaction(p) => &p.base.session_id,
-            Part::Retry(p) => &p.base.session_id,
-            Part::Agent(p) => &p.base.session_id,
-            Part::Snapshot(p) => &p.base.session_id,
-            Part::Patch(p) => &p.base.session_id,
-        }
+        part_base_field!(self, session_id)
     }
 
     /// List all parts for a message

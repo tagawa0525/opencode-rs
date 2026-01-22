@@ -7,8 +7,12 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// Shared HTTP client for all OAuth operations
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
 // ============================================================================
 // GitHub Copilot Device Code Flow
@@ -39,9 +43,7 @@ struct AccessTokenResponse {
 
 /// Request device code for GitHub Copilot
 pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
-    let client = Client::new();
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
@@ -72,13 +74,12 @@ pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
 
 /// Poll for access token after user authorizes
 pub async fn copilot_poll_for_token(device_code: &str, interval: u64) -> Result<String> {
-    let client = Client::new();
     let poll_interval = Duration::from_secs(interval.max(5));
 
     loop {
         sleep(poll_interval).await;
 
-        let response = client
+        let response = HTTP_CLIENT
             .post(GITHUB_ACCESS_TOKEN_URL)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
@@ -222,9 +223,7 @@ pub async fn openai_exchange_code(
     redirect_uri: &str,
     pkce: &PkceCodes,
 ) -> Result<OpenAITokenResponse> {
-    let client = Client::new();
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(format!("{}/oauth/token", OPENAI_ISSUER))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
@@ -256,9 +255,7 @@ pub async fn openai_exchange_code(
 
 /// Refresh OpenAI access token
 pub async fn openai_refresh_token(refresh_token: &str) -> Result<OpenAITokenResponse> {
-    let client = Client::new();
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(format!("{}/oauth/token", OPENAI_ISSUER))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(

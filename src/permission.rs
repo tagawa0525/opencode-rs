@@ -8,28 +8,38 @@ use crate::config::{Config, PermissionAction, PermissionRule};
 use anyhow::Result;
 use std::collections::HashMap;
 
+/// Default permission rules for tools
+const DEFAULT_PERMISSIONS: &[(&str, PermissionAction)] = &[
+    ("read", PermissionAction::Allow),
+    ("write", PermissionAction::Ask),
+    ("edit", PermissionAction::Ask),
+    ("bash", PermissionAction::Ask),
+    ("glob", PermissionAction::Allow),
+    ("grep", PermissionAction::Allow),
+    ("question", PermissionAction::Allow),
+    ("todowrite", PermissionAction::Allow),
+    ("todoread", PermissionAction::Allow),
+    ("webfetch", PermissionAction::Ask),
+    ("doom_loop", PermissionAction::Ask),
+];
+
 /// Permission checker for tools
 pub struct PermissionChecker {
     rules: HashMap<String, PermissionAction>,
 }
 
 impl PermissionChecker {
+    /// Create rules from default permissions
+    fn default_rules() -> HashMap<String, PermissionAction> {
+        DEFAULT_PERMISSIONS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
     /// Create a new permission checker from config
     pub fn from_config(config: &Config) -> Self {
-        let mut rules = HashMap::new();
-
-        // Default permissions - most tools require confirmation
-        rules.insert("read".to_string(), PermissionAction::Allow);
-        rules.insert("write".to_string(), PermissionAction::Ask);
-        rules.insert("edit".to_string(), PermissionAction::Ask);
-        rules.insert("bash".to_string(), PermissionAction::Ask);
-        rules.insert("glob".to_string(), PermissionAction::Allow);
-        rules.insert("grep".to_string(), PermissionAction::Allow);
-        rules.insert("question".to_string(), PermissionAction::Allow);
-        rules.insert("todowrite".to_string(), PermissionAction::Allow);
-        rules.insert("todoread".to_string(), PermissionAction::Allow);
-        rules.insert("webfetch".to_string(), PermissionAction::Ask);
-        rules.insert("doom_loop".to_string(), PermissionAction::Ask);
+        let mut rules = Self::default_rules();
 
         // Apply config overrides
         if let Some(permissions) = &config.permission {
@@ -126,19 +136,7 @@ impl PermissionChecker {
 impl Default for PermissionChecker {
     fn default() -> Self {
         Self {
-            rules: HashMap::from([
-                ("read".to_string(), PermissionAction::Allow),
-                ("write".to_string(), PermissionAction::Ask),
-                ("edit".to_string(), PermissionAction::Ask),
-                ("bash".to_string(), PermissionAction::Ask),
-                ("glob".to_string(), PermissionAction::Allow),
-                ("grep".to_string(), PermissionAction::Allow),
-                ("question".to_string(), PermissionAction::Allow),
-                ("todowrite".to_string(), PermissionAction::Allow),
-                ("todoread".to_string(), PermissionAction::Allow),
-                ("webfetch".to_string(), PermissionAction::Ask),
-                ("doom_loop".to_string(), PermissionAction::Ask),
-            ]),
+            rules: Self::default_rules(),
         }
     }
 }

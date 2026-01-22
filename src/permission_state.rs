@@ -35,8 +35,11 @@ pub struct PermissionRequestInfo {
 // Global permission state
 use std::sync::LazyLock;
 
+/// Type alias for permission response channels map
+type PermissionChannelMap = HashMap<String, tokio::sync::oneshot::Sender<tool::PermissionResponse>>;
+
 /// Response channels for pending permission requests
-static PERMISSION_RESPONSES: LazyLock<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<tool::PermissionResponse>>>>> =
+static PERMISSION_RESPONSES: LazyLock<Arc<Mutex<PermissionChannelMap>>> =
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Session-scoped approved permission rules (memory only)

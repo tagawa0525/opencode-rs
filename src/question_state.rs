@@ -22,8 +22,11 @@ pub struct QuestionRequestInfo {
 // Global question state
 use std::sync::LazyLock;
 
+/// Type alias for question response channels map
+type QuestionChannelMap = HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>;
+
 /// Response channels for pending question requests
-static QUESTION_RESPONSES: LazyLock<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>>>> =
+static QUESTION_RESPONSES: LazyLock<Arc<Mutex<QuestionChannelMap>>> =
     LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Pending question requests

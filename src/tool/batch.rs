@@ -232,7 +232,7 @@ impl Tool for BatchTool {
         // Build summarized details to avoid payload size issues
         let summarized_details: Vec<_> = all_results
             .iter()
-            .map(|r| build_summarized_result(r))
+            .map(build_summarized_result)
             .collect();
 
         // Build metadata
