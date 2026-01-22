@@ -45,10 +45,6 @@ pub struct WebFetchTool;
 
 #[async_trait::async_trait]
 impl Tool for WebFetchTool {
-    fn id(&self) -> &str {
-        "webfetch"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "webfetch".to_string(),

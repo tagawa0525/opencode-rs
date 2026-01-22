@@ -4,17 +4,13 @@ use crate::tui::types::DisplayMessage;
 
 /// Options for formatting transcripts
 pub struct TranscriptOptions {
-    pub include_thinking: bool,
     pub include_tool_details: bool,
-    pub include_metadata: bool,
 }
 
 impl Default for TranscriptOptions {
     fn default() -> Self {
         Self {
-            include_thinking: true,
             include_tool_details: true,
-            include_metadata: true,
         }
     }
 }
@@ -79,7 +75,7 @@ fn format_message_content(
             MessagePart::Text { text } => {
                 content.push_str(text);
             }
-            MessagePart::ToolCall { name, args, .. } => {
+            MessagePart::ToolCall { name, args } => {
                 if options.include_tool_details {
                     content.push_str(&format!(
                         "\n**Tool Call: {}**\n```json\n{}\n```\n",
@@ -87,9 +83,7 @@ fn format_message_content(
                     ));
                 }
             }
-            MessagePart::ToolResult {
-                output, is_error, ..
-            } => {
+            MessagePart::ToolResult { output, is_error } => {
                 if options.include_tool_details {
                     let status = if *is_error { "Error" } else { "Success" };
                     content.push_str(&format!(

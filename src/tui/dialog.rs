@@ -268,12 +268,11 @@ impl App {
     }
 
     /// Update dialog with device code info
-    pub fn show_device_code(&mut self, user_code: &str, verification_uri: &str, device_code: &str) {
+    pub fn show_device_code(&mut self, user_code: &str, verification_uri: &str) {
         if let Some(dialog) = &mut self.dialog {
             dialog.dialog_type = DialogType::OAuthDeviceCode;
             dialog.user_code = Some(user_code.to_string());
             dialog.verification_uri = Some(verification_uri.to_string());
-            dialog.device_code = Some(device_code.to_string());
             dialog.message = Some(format!(
                 "Go to: {}\n\nEnter code: {}",
                 verification_uri, user_code
@@ -922,11 +921,6 @@ pub async fn handle_dialog_input(
         }
         DialogType::Question => {
             handle_question_input(app, key.code, &event_tx).await?;
-        }
-        DialogType::None => {
-            if key.code == KeyCode::Esc {
-                app.close_dialog();
-            }
         }
     }
 

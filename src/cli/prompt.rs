@@ -135,7 +135,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
 
     // Create tool context
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-    let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
+    let tool_ctx = ToolContext::new("cli-session", "msg-1")
         .with_cwd(cwd.clone())
         .with_root(cwd.clone())
         .with_permission_handler(permission_handler);
@@ -300,7 +300,6 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
             StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
-                ..
             } => {
                 if format == "text" {
                     if !last_printed_newline {
@@ -319,7 +318,6 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
                 eprintln!("\nError: {}", err);
                 return Err(anyhow::anyhow!(err));
             }
-            _ => {}
         }
     }
 

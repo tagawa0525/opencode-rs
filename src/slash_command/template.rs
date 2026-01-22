@@ -1,8 +1,6 @@
 use super::{CommandContext, CommandInfo, CommandOutput, SlashCommand};
 use crate::config::CommandConfig;
-use crate::slash_command::parser::{
-    expand_template_async, extract_file_references,
-};
+use crate::slash_command::parser::{expand_template_async, extract_file_references};
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -100,12 +98,7 @@ mod tests {
 
         let cmd = TemplateCommand::new("explain".to_string(), config);
 
-        let ctx = CommandContext {
-            session_id: "test".to_string(),
-            cwd: ".".to_string(),
-            root: ".".to_string(),
-            extra: Default::default(),
-        };
+        let ctx = CommandContext {};
 
         let output = cmd.execute("Rust ownership", &ctx).await.unwrap();
         assert_eq!(output.text, "Explain Rust ownership in detail");
@@ -124,12 +117,7 @@ mod tests {
 
         let cmd = TemplateCommand::new("task".to_string(), config);
 
-        let ctx = CommandContext {
-            session_id: "test".to_string(),
-            cwd: ".".to_string(),
-            root: ".".to_string(),
-            extra: Default::default(),
-        };
+        let ctx = CommandContext {};
 
         let output = cmd.execute("search for files", &ctx).await.unwrap();
         assert_eq!(output.text, "Task: search for files");

@@ -7,32 +7,20 @@ use fuzzy_matcher::FuzzyMatcher;
 pub struct DisplayMessage {
     pub role: String,
     pub content: String,
-    pub time_created: i64,
     pub parts: Vec<MessagePart>,
 }
 
 /// Message part - can be text, tool call, or tool result
 #[derive(Debug, Clone)]
 pub enum MessagePart {
-    Text {
-        text: String,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        args: String,
-    },
-    ToolResult {
-        id: String,
-        output: String,
-        is_error: bool,
-    },
+    Text { text: String },
+    ToolCall { name: String, args: String },
+    ToolResult { output: String, is_error: bool },
 }
 
 /// Active dialog type
 #[derive(Debug, Clone, PartialEq)]
 pub enum DialogType {
-    None,
     ModelSelector,
     ProviderSelector,
     ApiKeyInput,
@@ -111,7 +99,6 @@ pub struct PermissionRequest {
     pub id: String,
     pub permission: String,
     pub patterns: Vec<String>,
-    pub always: Vec<String>,
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
@@ -130,7 +117,6 @@ pub struct DialogState {
     pub title: String,
     pub message: Option<String>,
     /// For OAuth device code flow
-    pub device_code: Option<String>,
     pub user_code: Option<String>,
     pub verification_uri: Option<String>,
     /// For permission requests
@@ -162,7 +148,6 @@ impl DialogState {
             input_value: String::new(),
             title: title.to_string(),
             message: None,
-            device_code: None,
             user_code: None,
             verification_uri: None,
             permission_request: None,
@@ -295,8 +280,6 @@ pub enum AppEvent {
     DeviceCodeReceived {
         user_code: String,
         verification_uri: String,
-        device_code: String,
-        interval: u64,
     },
     OAuthSuccess {
         provider_id: String,

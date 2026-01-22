@@ -148,14 +148,6 @@ fn parse_anthropic_usage(usage: &serde_json::Value) -> StreamEvent {
             .get("output_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
-        cache_read_tokens: usage
-            .get("cache_read_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        cache_write_tokens: usage
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
     }
 }
 
@@ -272,12 +264,6 @@ fn parse_openai_usage(usage: &serde_json::Value) -> StreamEvent {
             .get("completion_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
-        cache_read_tokens: usage
-            .get("prompt_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        cache_write_tokens: 0,
     }
 }
 
@@ -378,8 +364,8 @@ data: {"type":"message_delta","usage":{"input_tokens":100,"output_tokens":50,"ca
             let result = parser.parse(event);
             assert!(matches!(
                 result,
-                Some(StreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens })
-                    if input_tokens == 100 && output_tokens == 50 && cache_read_tokens == 10 && cache_write_tokens == 5
+                Some(StreamEvent::Usage { input_tokens, output_tokens })
+                    if input_tokens == 100 && output_tokens == 50
             ));
         }
 
@@ -475,8 +461,8 @@ data: {}"#;
             let result = parser.parse(line);
             assert!(matches!(
                 result,
-                Some(StreamEvent::Usage { input_tokens, output_tokens, cache_read_tokens, .. })
-                    if input_tokens == 100 && output_tokens == 50 && cache_read_tokens == 10
+                Some(StreamEvent::Usage { input_tokens, output_tokens })
+                    if input_tokens == 100 && output_tokens == 50
             ));
         }
 

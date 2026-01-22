@@ -3,10 +3,10 @@ use super::template::TemplateCommand;
 use super::SlashCommand;
 use crate::config::CommandConfig;
 use anyhow::{Context, Result};
+use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use ignore::WalkBuilder;
 
 /// Load slash commands from markdown files in the .opencode/command directory
 pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dyn SlashCommand>>> {

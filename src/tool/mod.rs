@@ -10,7 +10,6 @@ mod edit;
 mod executor;
 mod glob;
 mod grep;
-mod invalid;
 mod model_utils;
 mod question;
 mod read;
@@ -132,8 +131,6 @@ pub struct ToolContext {
     pub session_id: String,
     /// Message ID
     pub message_id: String,
-    /// Agent name
-    pub agent: String,
     /// Model ID (e.g., "claude-sonnet-4-5")
     pub model_id: Option<String>,
     /// Abort signal
@@ -151,11 +148,10 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    pub fn new(session_id: &str, message_id: &str, agent: &str) -> Self {
+    pub fn new(session_id: &str, message_id: &str) -> Self {
         Self {
             session_id: session_id.to_string(),
             message_id: message_id.to_string(),
-            agent: agent.to_string(),
             model_id: None,
             abort: None,
             cwd: std::env::current_dir()
@@ -168,16 +164,6 @@ impl ToolContext {
             permission_handler: None,
             question_handler: None,
         }
-    }
-
-    pub fn with_model_id(mut self, model_id: String) -> Self {
-        self.model_id = Some(model_id);
-        self
-    }
-
-    pub fn with_abort(mut self, abort: tokio::sync::watch::Receiver<bool>) -> Self {
-        self.abort = Some(abort);
-        self
     }
 
     pub fn with_cwd(mut self, cwd: String) -> Self {
@@ -353,9 +339,6 @@ pub struct FileAttachment {
 /// Trait for implementing tools
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
-    /// Get the tool's unique identifier
-    fn id(&self) -> &str;
-
     /// Get the tool definition for the LLM
     fn definition(&self) -> ToolDefinition;
 

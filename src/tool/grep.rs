@@ -44,10 +44,6 @@ struct SearchResult {
 
 #[async_trait::async_trait]
 impl Tool for GrepTool {
-    fn id(&self) -> &str {
-        "grep"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "grep".to_string(),
@@ -130,7 +126,10 @@ fn parse_args(args: Value, ctx: &ToolContext) -> Result<GrepArgs> {
         .and_then(|v| v.as_str())
         .unwrap_or(&ctx.cwd);
 
-    let search_path = ctx.resolve_path(search_path_arg).to_string_lossy().to_string();
+    let search_path = ctx
+        .resolve_path(search_path_arg)
+        .to_string_lossy()
+        .to_string();
 
     let include_pattern = args
         .get("include")

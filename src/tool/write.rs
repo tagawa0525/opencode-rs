@@ -16,10 +16,6 @@ impl WriteTool {
 
 #[async_trait::async_trait]
 impl Tool for WriteTool {
-    fn id(&self) -> &str {
-        "write"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "write".to_string(),

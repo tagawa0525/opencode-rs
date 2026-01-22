@@ -9,8 +9,7 @@ use std::sync::Arc;
 use super::input::Action;
 use super::theme::Theme;
 use super::types::{
-    AutocompleteState, DialogState, DialogType, DisplayMessage, MessagePart,
-    PermissionRequest,
+    AutocompleteState, DialogState, DialogType, DisplayMessage, MessagePart, PermissionRequest,
 };
 use crate::config::Config;
 use crate::provider::{self, Provider};
@@ -67,14 +66,10 @@ pub struct App {
     pub show_thinking: bool,
     /// Show tool details in messages
     pub show_tool_details: bool,
-    /// Show assistant metadata (model, agent, etc)
-    pub show_assistant_metadata: bool,
     /// Message history for undo/redo
     pub message_history: Vec<Vec<DisplayMessage>>,
     /// Current position in history
     pub history_position: usize,
-    /// Maximum history entries
-    pub max_history: usize,
     /// Input history (past user messages)
     pub input_history: Vec<String>,
     /// Current position in input history (0 = most recent)
@@ -125,10 +120,8 @@ impl Default for App {
             autocomplete: None,
             show_thinking: true,
             show_tool_details: true,
-            show_assistant_metadata: true,
             message_history: Vec::new(),
             history_position: 0,
-            max_history: 50,
             input_history: Vec::new(),
             input_history_position: None,
             input_history_buffer: String::new(),
@@ -211,22 +204,6 @@ impl App {
         app.init_commands(&config).await;
 
         Ok(app)
-    }
-
-    /// Save current message state to history for undo/redo
-    pub fn save_history_snapshot(&mut self) {
-        // Truncate history after current position (creating new branch)
-        self.message_history.truncate(self.history_position);
-
-        // Save current messages
-        self.message_history.push(self.messages.clone());
-
-        // Limit history size
-        if self.message_history.len() > self.max_history {
-            self.message_history.remove(0);
-        } else {
-            self.history_position += 1;
-        }
     }
 
     /// Check if undo is possible
@@ -440,7 +417,6 @@ impl App {
         self.messages.push(DisplayMessage {
             role: role.to_string(),
             content: content.to_string(),
-            time_created: chrono::Utc::now().timestamp_millis(),
             parts: vec![MessagePart::Text {
                 text: content.to_string(),
             }],
@@ -448,10 +424,9 @@ impl App {
     }
 
     /// Add a tool call to the last message
-    pub fn add_tool_call(&mut self, id: &str, name: &str, args: &str) {
+    pub fn add_tool_call(&mut self, _id: &str, name: &str, args: &str) {
         if let Some(msg) = self.messages.last_mut() {
             msg.parts.push(MessagePart::ToolCall {
-                id: id.to_string(),
                 name: name.to_string(),
                 args: args.to_string(),
             });
@@ -459,22 +434,12 @@ impl App {
     }
 
     /// Add a tool result to the messages
-    pub fn add_tool_result(&mut self, id: &str, output: &str, is_error: bool) {
+    pub fn add_tool_result(&mut self, _id: &str, output: &str, is_error: bool) {
         if let Some(msg) = self.messages.last_mut() {
             msg.parts.push(MessagePart::ToolResult {
-                id: id.to_string(),
                 output: output.to_string(),
                 is_error,
             });
-        }
-    }
-
-    /// Update the last assistant message
-    pub fn update_last_assistant(&mut self, content: &str) {
-        if let Some(msg) = self.messages.last_mut() {
-            if msg.role == "assistant" {
-                msg.content = content.to_string();
-            }
         }
     }
 
@@ -635,43 +600,6 @@ impl App {
         } else {
             output.to_string()
         }
-    }
-
-    /// Copy text to clipboard using both OSC 52 and system clipboard
-    pub fn copy_to_clipboard(&self, text: &str) -> Result<()> {
-        // Use OSC 52 for terminal clipboard integration
-        self.copy_via_osc52(text)?;
-
-        // Also try system clipboard
-        use arboard::Clipboard;
-        if let Ok(mut clipboard) = Clipboard::new() {
-            let _ = clipboard.set_text(text);
-        }
-
-        Ok(())
-    }
-
-    /// Copy text to clipboard using OSC 52 escape sequence
-    fn copy_via_osc52(&self, text: &str) -> Result<()> {
-        use base64::Engine;
-        let base64_text = base64::engine::general_purpose::STANDARD.encode(text);
-        let osc52 = format!("\x1b]52;c;{}\x07", base64_text);
-
-        // Check if running in tmux
-        let osc52_final = if std::env::var("TMUX").is_ok() {
-            // Wrap OSC 52 for tmux
-            format!("\x1bPtmux;\x1b{}\x1b\\", osc52)
-        } else {
-            osc52
-        };
-
-        // Write to stdout
-        use std::io::Write;
-        let mut stdout = std::io::stdout();
-        stdout.write_all(osc52_final.as_bytes())?;
-        stdout.flush()?;
-
-        Ok(())
     }
 
     /// Initialize slash commands
@@ -899,14 +827,6 @@ mod tests {
             app.add_message("assistant", "Hello");
             app.append_to_assistant(" world");
             assert_eq!(app.messages[0].content, "Hello world");
-        }
-
-        #[test]
-        fn test_update_last_assistant() {
-            let mut app = App::default();
-            app.add_message("assistant", "Hello");
-            app.update_last_assistant("Goodbye");
-            assert_eq!(app.messages[0].content, "Goodbye");
         }
     }
 

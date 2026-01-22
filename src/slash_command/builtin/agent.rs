@@ -41,9 +41,4 @@ impl SlashCommand for AgentCommand {
             })
         }
     }
-
-    async fn complete(&self, _partial: &str) -> Vec<String> {
-        // TODO: Integrate with config to suggest available agents
-        vec![]
-    }
 }

@@ -37,10 +37,6 @@ struct CommandOutput {
 
 #[async_trait::async_trait]
 impl Tool for BashTool {
-    fn id(&self) -> &str {
-        "bash"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "bash".to_string(),

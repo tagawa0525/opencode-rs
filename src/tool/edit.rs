@@ -16,10 +16,6 @@ impl EditTool {
 
 #[async_trait::async_trait]
 impl Tool for EditTool {
-    fn id(&self) -> &str {
-        "edit"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "edit".to_string(),

@@ -67,7 +67,6 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
         DialogType::Question => {
             render_question_dialog(frame, dialog, theme, inner);
         }
-        DialogType::None => {}
     }
 }
 

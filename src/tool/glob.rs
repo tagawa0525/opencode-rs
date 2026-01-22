@@ -17,10 +17,6 @@ impl GlobTool {
 
 #[async_trait::async_trait]
 impl Tool for GlobTool {
-    fn id(&self) -> &str {
-        "glob"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "glob".to_string(),
@@ -59,7 +55,10 @@ impl Tool for GlobTool {
             .and_then(|v| v.as_str())
             .unwrap_or(&ctx.cwd);
 
-        let search_path = ctx.resolve_path(search_path_arg).to_string_lossy().to_string();
+        let search_path = ctx
+            .resolve_path(search_path_arg)
+            .to_string_lossy()
+            .to_string();
 
         // Request permission before globbing
         let metadata = HashMap::from([

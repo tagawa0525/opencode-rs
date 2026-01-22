@@ -40,10 +40,6 @@ impl ReadTool {
 
 #[async_trait::async_trait]
 impl Tool for ReadTool {
-    fn id(&self) -> &str {
-        "read"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read".to_string(),

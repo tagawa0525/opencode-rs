@@ -85,40 +85,6 @@ impl CommandRegistry {
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
     }
-
-    /// Get autocomplete suggestions for a partial command name
-    pub async fn complete_command(&self, partial: &str) -> Vec<String> {
-        let commands = self.commands.read().await;
-        let aliases = self.aliases.read().await;
-
-        let mut matches = Vec::new();
-
-        // Check command names
-        for name in commands.keys() {
-            if name.starts_with(partial) {
-                matches.push(format!("/{}", name));
-            }
-        }
-
-        // Check aliases
-        for alias in aliases.keys() {
-            if alias.starts_with(partial) && !matches.contains(&format!("/{}", alias)) {
-                matches.push(format!("/{}", alias));
-            }
-        }
-
-        matches.sort();
-        matches
-    }
-
-    /// Get autocomplete suggestions for command arguments
-    pub async fn complete_args(&self, name: &str, partial: &str) -> Vec<String> {
-        if let Some(cmd) = self.get(name).await {
-            cmd.complete(partial).await
-        } else {
-            vec![]
-        }
-    }
 }
 
 impl Default for CommandRegistry {
@@ -176,12 +142,7 @@ mod tests {
 
         registry.register(cmd).await;
 
-        let ctx = CommandContext {
-            session_id: "test".to_string(),
-            cwd: ".".to_string(),
-            root: ".".to_string(),
-            extra: HashMap::new(),
-        };
+        let ctx = CommandContext {};
 
         let result = registry.execute("echo", "hello", &ctx).await.unwrap();
         assert_eq!(result.text, "echo: hello");
@@ -209,29 +170,5 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].name, "cmd1");
         assert_eq!(commands[1].name, "cmd2");
-    }
-
-    #[tokio::test]
-    async fn test_complete_command() {
-        let registry = CommandRegistry::new();
-
-        registry
-            .register(Arc::new(TestCommand {
-                name: "help".to_string(),
-                description: "Help command".to_string(),
-            }))
-            .await;
-
-        registry
-            .register(Arc::new(TestCommand {
-                name: "hello".to_string(),
-                description: "Hello command".to_string(),
-            }))
-            .await;
-
-        let matches = registry.complete_command("hel").await;
-        assert_eq!(matches.len(), 2);
-        assert!(matches.contains(&"/help".to_string()));
-        assert!(matches.contains(&"/hello".to_string()));
     }
 }

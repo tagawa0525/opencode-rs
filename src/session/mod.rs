@@ -104,21 +104,15 @@ pub struct FileDiff {
 
 /// Session events
 #[derive(Debug, Clone)]
-pub struct SessionCreated {
-    pub session: Session,
-}
+pub struct SessionCreated {}
 impl Event for SessionCreated {}
 
 #[derive(Debug, Clone)]
-pub struct SessionUpdated {
-    pub session: Session,
-}
+pub struct SessionUpdated {}
 impl Event for SessionUpdated {}
 
 #[derive(Debug, Clone)]
-pub struct SessionDeleted {
-    pub session: Session,
-}
+pub struct SessionDeleted {}
 impl Event for SessionDeleted {}
 
 impl Session {
@@ -169,10 +163,7 @@ impl Session {
             .context("Failed to save session")?;
 
         // Publish event
-        bus::publish(SessionCreated {
-            session: session.clone(),
-        })
-        .await;
+        bus::publish(SessionCreated {}).await;
 
         Ok(session)
     }
@@ -197,10 +188,7 @@ impl Session {
             .await
             .context("Failed to update session")?;
 
-        bus::publish(SessionUpdated {
-            session: self.clone(),
-        })
-        .await;
+        bus::publish(SessionUpdated {}).await;
 
         Ok(())
     }
@@ -235,8 +223,8 @@ impl Session {
             .await
             .context("Failed to delete session")?;
 
-        if let Some(session) = session {
-            bus::publish(SessionDeleted { session }).await;
+        if session.is_some() {
+            bus::publish(SessionDeleted {}).await;
         }
 
         Ok(())
@@ -260,25 +248,6 @@ impl Session {
         sessions.sort_by(|a, b| a.id.cmp(&b.id));
 
         Ok(sessions)
-    }
-
-    /// Get child sessions
-    pub async fn children(&self, project_id: &str) -> Result<Vec<Session>> {
-        let all_sessions = Self::list(project_id).await?;
-        Ok(all_sessions
-            .into_iter()
-            .filter(|s| s.parent_id.as_ref() == Some(&self.id))
-            .collect())
-    }
-
-    /// Check if title is a default title
-    pub fn is_default_title(&self) -> bool {
-        self.title.starts_with("New session - ") || self.title.starts_with("Child session - ")
-    }
-
-    /// Touch the session (update timestamp)
-    pub async fn touch(&mut self, project_id: &str) -> Result<()> {
-        self.update(project_id, |_| {}).await
     }
 
     /// Get all messages for this session
@@ -362,6 +331,5 @@ mod tests {
 
         assert!(session.id.starts_with("ses_"));
         assert!(!session.slug.is_empty());
-        assert!(session.is_default_title());
     }
 }

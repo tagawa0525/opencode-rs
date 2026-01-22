@@ -18,18 +18,10 @@ pub enum StreamEvent {
     ToolCallDelta { id: String, arguments_delta: String },
     /// Tool call completed
     ToolCallEnd { id: String },
-    /// Tool result ready (for manual execution)
-    ToolResult {
-        id: String,
-        result: String,
-        is_error: bool,
-    },
     /// Usage information
     Usage {
         input_tokens: u64,
         output_tokens: u64,
-        cache_read_tokens: u64,
-        cache_write_tokens: u64,
     },
     /// Stream finished
     Done { finish_reason: String },

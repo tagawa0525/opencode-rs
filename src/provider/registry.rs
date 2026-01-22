@@ -4,7 +4,7 @@
 //! configuration, and model loading from various sources.
 
 use super::models_dev;
-use super::types::{Model, ModelStatus, Provider, ProviderSource};
+use super::types::{Model, Provider, ProviderSource};
 use crate::config::Config;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -283,71 +283,6 @@ impl ProviderRegistry {
             .filter(|p| p.key.is_some())
             .cloned()
             .collect()
-    }
-
-    /// List all models across all providers
-    ///
-    /// # Arguments
-    /// * `include_deprecated` - If false, filters out deprecated models
-    pub async fn list_all_models(&self, include_deprecated: bool) -> Vec<(String, Model)> {
-        let providers = self.providers.read().await;
-        let mut models = Vec::new();
-
-        for provider in providers.values() {
-            for (model_id, model) in &provider.models {
-                // Skip deprecated models if requested
-                if !include_deprecated && matches!(model.status, ModelStatus::Deprecated) {
-                    continue;
-                }
-
-                models.push((format!("{}/{}", provider.id, model_id), model.clone()));
-            }
-        }
-
-        // Sort models by status (Active first, then Beta, Alpha, Deprecated)
-        models.sort_by(|(_, a), (_, b)| {
-            let a_priority = match a.status {
-                ModelStatus::Active => 0,
-                ModelStatus::Beta => 1,
-                ModelStatus::Alpha => 2,
-                ModelStatus::Deprecated => 3,
-            };
-            let b_priority = match b.status {
-                ModelStatus::Active => 0,
-                ModelStatus::Beta => 1,
-                ModelStatus::Alpha => 2,
-                ModelStatus::Deprecated => 3,
-            };
-
-            a_priority
-                .cmp(&b_priority)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-
-        models
-    }
-
-    /// Get the default model
-    pub async fn default_model(&self, config: &Config) -> Option<(String, String)> {
-        // Check config for default model
-        if let Some(model) = &config.model {
-            let parts: Vec<&str> = model.splitn(2, '/').collect();
-            if parts.len() == 2 {
-                return Some((parts[0].to_string(), parts[1].to_string()));
-            }
-        }
-
-        // Find first available provider with a model
-        let providers = self.providers.read().await;
-        for provider in providers.values() {
-            if provider.key.is_some() {
-                if let Some(model_id) = provider.models.keys().next() {
-                    return Some((provider.id.clone(), model_id.clone()));
-                }
-            }
-        }
-
-        None
     }
 }
 

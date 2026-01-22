@@ -34,11 +34,6 @@ impl ParsedCommand {
 
         Some(ParsedCommand { name, args })
     }
-
-    /// Parse arguments into a vector of strings, respecting quotes
-    pub fn parse_args(&self) -> Vec<String> {
-        parse_quoted_args(&self.args)
-    }
 }
 
 /// Parse arguments respecting single and double quotes

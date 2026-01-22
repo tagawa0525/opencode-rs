@@ -102,9 +102,6 @@ open = "5.3.3"
 tokio-test = "0.4.5"
 pretty_assertions = "1.4.1"
 
-[lints.rust]
-dead_code = "allow"
-
 [profile.release]
 lto = true
 codegen-units = 1

@@ -185,9 +185,7 @@ fn handle_status(app: &mut App) {
 /// Create transcript options from app state
 fn create_transcript_options(app: &App) -> crate::tui::TranscriptOptions {
     crate::tui::TranscriptOptions {
-        include_thinking: app.show_thinking,
         include_tool_details: app.show_tool_details,
-        include_metadata: app.show_assistant_metadata,
     }
 }
 

@@ -4,7 +4,6 @@
 //! including text, tool calls, files, and other structured content.
 
 use crate::bus::{self, Event};
-use crate::id::{self, IdPrefix};
 use crate::storage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -71,10 +70,6 @@ impl Part {
         part_base_field!(self, message_id)
     }
 
-    pub fn session_id(&self) -> &str {
-        part_base_field!(self, session_id)
-    }
-
     /// List all parts for a message
     pub async fn list(message_id: &str) -> Result<Vec<Part>> {
         let keys = storage::global().list(&["part", message_id]).await?;
@@ -102,35 +97,9 @@ impl Part {
             .await
             .context("Failed to save part")?;
 
-        bus::publish(PartUpdated { part: self.clone() }).await;
+        bus::publish(PartUpdated {}).await;
 
         Ok(())
-    }
-
-    /// Create a new text part
-    pub fn text(session_id: &str, message_id: &str, text: String) -> Self {
-        Part::Text(TextPart {
-            base: PartBase::new(session_id, message_id),
-            text,
-            synthetic: None,
-            ignored: None,
-            time: None,
-            metadata: None,
-        })
-    }
-
-    /// Create a new tool part
-    pub fn tool(session_id: &str, message_id: &str, tool: String, call_id: String) -> Self {
-        Part::Tool(ToolPart {
-            base: PartBase::new(session_id, message_id),
-            tool,
-            call_id,
-            state: ToolState::Pending(ToolStatePending {
-                input: serde_json::Value::Null,
-                raw: String::new(),
-            }),
-            metadata: None,
-        })
     }
 }
 
@@ -140,16 +109,6 @@ pub struct PartBase {
     pub id: String,
     pub session_id: String,
     pub message_id: String,
-}
-
-impl PartBase {
-    pub fn new(session_id: &str, message_id: &str) -> Self {
-        Self {
-            id: id::ascending(IdPrefix::Part),
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,70 +329,45 @@ pub struct PartTime {
 
 /// Part events
 #[derive(Debug, Clone)]
-pub struct PartUpdated {
-    pub part: Part,
-}
+pub struct PartUpdated {}
 impl Event for PartUpdated {}
-
-#[derive(Debug, Clone)]
-pub struct PartRemoved {
-    pub session_id: String,
-    pub message_id: String,
-    pub part_id: String,
-}
-impl Event for PartRemoved {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::id::{self, IdPrefix};
 
     mod part {
         use super::*;
 
         #[test]
-        fn test_text_part_creation() {
-            let part = Part::text("session_123", "msg_456", "Hello world".to_string());
-
-            match part {
-                Part::Text(text_part) => {
-                    assert!(text_part.base.id.starts_with("prt_"));
-                    assert_eq!(text_part.base.session_id, "session_123");
-                    assert_eq!(text_part.base.message_id, "msg_456");
-                    assert_eq!(text_part.text, "Hello world");
-                }
-                _ => panic!("Expected Text part"),
-            }
-        }
-
-        #[test]
-        fn test_tool_part_creation() {
-            let part = Part::tool(
-                "session_123",
-                "msg_456",
-                "bash".to_string(),
-                "call_789".to_string(),
-            );
-
-            match part {
-                Part::Tool(tool_part) => {
-                    assert!(tool_part.base.id.starts_with("prt_"));
-                    assert_eq!(tool_part.tool, "bash");
-                    assert_eq!(tool_part.call_id, "call_789");
-                    assert!(matches!(tool_part.state, ToolState::Pending(_)));
-                }
-                _ => panic!("Expected Tool part"),
-            }
-        }
-
-        #[test]
         fn test_part_id() {
-            let text_part = Part::text("session_123", "msg_456", "Hello".to_string());
-            let tool_part = Part::tool(
-                "session_123",
-                "msg_456",
-                "bash".to_string(),
-                "call_789".to_string(),
-            );
+            let text_part = Part::Text(TextPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                text: "Hello".to_string(),
+                synthetic: None,
+                ignored: None,
+                time: None,
+                metadata: None,
+            });
+            let tool_part = Part::Tool(ToolPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                tool: "bash".to_string(),
+                call_id: "call_789".to_string(),
+                state: ToolState::Pending(ToolStatePending {
+                    input: serde_json::Value::Null,
+                    raw: String::new(),
+                }),
+                metadata: None,
+            });
 
             assert!(text_part.id().starts_with("prt_"));
             assert!(tool_part.id().starts_with("prt_"));
@@ -441,14 +375,19 @@ mod tests {
 
         #[test]
         fn test_part_message_id() {
-            let part = Part::text("session_123", "msg_456", "Hello".to_string());
+            let part = Part::Text(TextPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                text: "Hello".to_string(),
+                synthetic: None,
+                ignored: None,
+                time: None,
+                metadata: None,
+            });
             assert_eq!(part.message_id(), "msg_456");
-        }
-
-        #[test]
-        fn test_part_session_id() {
-            let part = Part::text("session_123", "msg_456", "Hello".to_string());
-            assert_eq!(part.session_id(), "session_123");
         }
     }
 

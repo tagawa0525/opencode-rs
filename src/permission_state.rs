@@ -29,7 +29,6 @@ pub struct PermissionRequestInfo {
     pub permission: String,
     pub patterns: Vec<String>,
     pub always: Vec<String>,
-    pub metadata: HashMap<String, serde_json::Value>,
 }
 
 // Global permission state
@@ -346,7 +345,6 @@ pub fn create_cli_permission_handler() -> crate::tool::PermissionHandler {
                 permission: request_clone.permission.clone(),
                 patterns: request_clone.patterns.clone(),
                 always: request_clone.always.clone(),
-                metadata: request_clone.metadata.clone(),
             })
             .await;
 
@@ -437,7 +435,6 @@ pub fn create_tui_permission_handler(
                 permission: request_clone.permission.clone(),
                 patterns: request_clone.patterns.clone(),
                 always: request_clone.always.clone(),
-                metadata: request_clone.metadata.clone(),
             })
             .await;
 
@@ -447,7 +444,6 @@ pub fn create_tui_permission_handler(
                     id: request_clone.id,
                     permission: request_clone.permission,
                     patterns: request_clone.patterns,
-                    always: request_clone.always,
                     metadata: request_clone.metadata,
                 },
             ));

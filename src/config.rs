@@ -563,15 +563,6 @@ impl Config {
         self
     }
 
-    /// Get the effective username
-    pub fn get_username(&self) -> String {
-        self.username
-            .clone()
-            .or_else(|| std::env::var("USER").ok())
-            .or_else(|| std::env::var("USERNAME").ok())
-            .unwrap_or_else(|| "user".to_string())
-    }
-
     /// Create a default config file if it doesn't exist
     pub async fn init() -> Result<PathBuf> {
         let config_dir = Self::global_config_dir()

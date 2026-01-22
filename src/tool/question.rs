@@ -31,10 +31,6 @@ pub struct QuestionTool;
 
 #[async_trait::async_trait]
 impl Tool for QuestionTool {
-    fn id(&self) -> &str {
-        "question"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "question".to_string(),

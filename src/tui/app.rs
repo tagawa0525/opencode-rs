@@ -24,9 +24,7 @@ use super::ui;
 pub use super::state::App;
 
 // Re-export types for backward compatibility
-pub use super::types::{
-    AppEvent, AutocompleteState,
-};
+pub use super::types::{AppEvent, AutocompleteState};
 use crate::config::Config;
 use crate::provider;
 use crate::slash_command::{parser::ParsedCommand, CommandContext};
@@ -83,23 +81,8 @@ pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Resul
 }
 
 /// Create a command context from the current app state
-fn create_command_context(app: &App) -> CommandContext {
-    CommandContext {
-        session_id: app
-            .session
-            .as_ref()
-            .map(|s| s.id.clone())
-            .unwrap_or_default(),
-        cwd: std::env::current_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(String::from))
-            .unwrap_or_else(|| ".".to_string()),
-        root: std::env::current_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(String::from))
-            .unwrap_or_else(|| ".".to_string()),
-        extra: Default::default(),
-    }
+fn create_command_context(_app: &App) -> CommandContext {
+    CommandContext {}
 }
 
 /// Handle autocomplete key events
@@ -312,10 +295,8 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
         AppEvent::DeviceCodeReceived {
             user_code,
             verification_uri,
-            device_code,
-            interval: _,
         } => {
-            app.show_device_code(&user_code, &verification_uri, &device_code);
+            app.show_device_code(&user_code, &verification_uri);
             let _ = open::that(&verification_uri);
         }
         AppEvent::OAuthSuccess { provider_id } => {

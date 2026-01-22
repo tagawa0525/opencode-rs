@@ -10,13 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::tool::{QuestionInfo, QuestionResponse};
+use crate::tool::QuestionResponse;
 
 /// Question request information
 #[derive(Debug, Clone)]
 pub struct QuestionRequestInfo {
     pub id: String,
-    pub questions: Vec<QuestionInfo>,
 }
 
 // Global question state
@@ -81,7 +80,6 @@ pub fn create_tui_question_handler(
             // Store pending request
             store_pending_request(QuestionRequestInfo {
                 id: request_clone.id.clone(),
-                questions: request_clone.questions.clone(),
             })
             .await;
 

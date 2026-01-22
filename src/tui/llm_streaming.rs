@@ -8,8 +8,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::types::AppEvent;
-use crate::config::Config;
-use crate::permission::PermissionChecker;
 use crate::provider::{
     self, ChatContent, ChatMessage, ContentPart, Model, OpenAIRequest, StreamEvent,
     StreamingClient, ToolDefinition,
@@ -33,7 +31,6 @@ struct StreamContext {
     model: Model,
     tool_defs: Vec<ToolDefinition>,
     tool_ctx: Arc<ToolContext>,
-    permission_checker: PermissionChecker,
     event_tx: mpsc::Sender<AppEvent>,
     system_prompt: String,
 }
@@ -103,9 +100,6 @@ async fn initialize_stream_context(
     model_id: &str,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Result<StreamContext> {
-    let config = Config::load().await?;
-    let permission_checker = PermissionChecker::from_config(&config);
-
     let provider = provider::registry()
         .get(provider_id)
         .await
@@ -144,7 +138,7 @@ async fn initialize_stream_context(
     let question_handler = crate::question_state::create_tui_question_handler(event_tx.clone());
 
     let tool_ctx = Arc::new(
-        ToolContext::new("", "", "tui")
+        ToolContext::new("", "")
             .with_cwd(cwd.clone())
             .with_root(cwd.clone())
             .with_permission_handler(permission_handler)
@@ -160,7 +154,6 @@ async fn initialize_stream_context(
         model,
         tool_defs,
         tool_ctx,
-        permission_checker,
         event_tx,
         system_prompt,
     })

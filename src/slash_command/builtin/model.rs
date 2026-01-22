@@ -41,9 +41,4 @@ impl SlashCommand for ModelCommand {
             })
         }
     }
-
-    async fn complete(&self, _partial: &str) -> Vec<String> {
-        // TODO: Integrate with provider registry to suggest available models
-        vec![]
-    }
 }
