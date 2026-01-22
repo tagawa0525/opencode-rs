@@ -211,9 +211,8 @@ impl Storage {
 }
 
 // Global storage instance
-lazy_static::lazy_static! {
-    static ref GLOBAL_STORAGE: Storage = Storage::with_defaults();
-}
+static GLOBAL_STORAGE: std::sync::LazyLock<Storage> =
+    std::sync::LazyLock::new(Storage::with_defaults);
 
 /// Get the global storage instance
 pub fn global() -> &'static Storage {

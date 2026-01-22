@@ -35,7 +35,8 @@ use crate::slash_command::{parser::ParsedCommand, CommandContext};
 /// Run the TUI application
 pub async fn run(initial_prompt: Option<String>, model: Option<String>) -> Result<()> {
     // Check if we're running in a TTY
-    if !atty::is(atty::Stream::Stdout) {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
         anyhow::bail!(
             "This command requires a TTY (terminal). Please run in an interactive terminal,\n\
             or use the 'prompt' command instead for non-interactive usage:\n  \

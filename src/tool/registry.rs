@@ -151,9 +151,8 @@ impl Default for ToolRegistry {
 }
 
 // Global tool registry
-lazy_static::lazy_static! {
-    static ref GLOBAL_REGISTRY: Arc<ToolRegistry> = Arc::new(ToolRegistry::with_defaults());
-}
+static GLOBAL_REGISTRY: std::sync::LazyLock<Arc<ToolRegistry>> =
+    std::sync::LazyLock::new(|| Arc::new(ToolRegistry::with_defaults()));
 
 /// Get the global tool registry
 pub fn registry() -> Arc<ToolRegistry> {

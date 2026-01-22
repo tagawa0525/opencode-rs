@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use walkdir::WalkDir;
+use ignore::WalkBuilder;
 
 /// Load slash commands from markdown files in the .opencode/command directory
 pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dyn SlashCommand>>> {
@@ -27,10 +27,14 @@ pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dy
         tracing::debug!("Loading commands from: {:?}", dir);
 
         // Walk through directory recursively
-        for entry in WalkDir::new(&dir)
+        for entry in WalkBuilder::new(&dir)
             .follow_links(true)
-            .max_depth(10) // Prevent infinite recursion from symlink loops
-            .into_iter()
+            .max_depth(Some(10)) // Prevent infinite recursion from symlink loops
+            .git_ignore(false) // Don't respect gitignore for .opencode directory
+            .git_global(false)
+            .git_exclude(false)
+            .hidden(false) // Include hidden files
+            .build()
             .filter_map(|e| e.ok())
         {
             let path = entry.path();

@@ -78,9 +78,8 @@ impl EventBus {
 pub trait Event: Clone + Send + Sync + 'static {}
 
 // Global event bus instance
-lazy_static::lazy_static! {
-    static ref GLOBAL_BUS: Arc<EventBus> = Arc::new(EventBus::new());
-}
+static GLOBAL_BUS: std::sync::LazyLock<Arc<EventBus>> =
+    std::sync::LazyLock::new(|| Arc::new(EventBus::new()));
 
 /// Get the global event bus
 pub fn global() -> Arc<EventBus> {

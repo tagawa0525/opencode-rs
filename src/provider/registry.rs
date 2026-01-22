@@ -358,9 +358,8 @@ impl Default for ProviderRegistry {
 }
 
 // Global provider registry
-lazy_static::lazy_static! {
-    static ref GLOBAL_REGISTRY: Arc<ProviderRegistry> = Arc::new(ProviderRegistry::new());
-}
+static GLOBAL_REGISTRY: std::sync::LazyLock<Arc<ProviderRegistry>> =
+    std::sync::LazyLock::new(|| Arc::new(ProviderRegistry::new()));
 
 /// Get the global provider registry
 pub fn registry() -> Arc<ProviderRegistry> {

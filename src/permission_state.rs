@@ -33,27 +33,27 @@ pub struct PermissionRequestInfo {
 }
 
 // Global permission state
-lazy_static::lazy_static! {
-    /// Response channels for pending permission requests
-    static ref PERMISSION_RESPONSES: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<tool::PermissionResponse>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+use std::sync::LazyLock;
 
-    /// Session-scoped approved permission rules (memory only)
-    static ref SESSION_RULES: Arc<Mutex<Vec<PermissionRule>>> =
-        Arc::new(Mutex::new(Vec::new()));
+/// Response channels for pending permission requests
+static PERMISSION_RESPONSES: LazyLock<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<tool::PermissionResponse>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-    /// Workspace-scoped approved permission rules (saved to project .opencode/permissions.json)
-    static ref WORKSPACE_RULES: Arc<Mutex<Vec<PermissionRule>>> =
-        Arc::new(Mutex::new(Vec::new()));
+/// Session-scoped approved permission rules (memory only)
+static SESSION_RULES: LazyLock<Arc<Mutex<Vec<PermissionRule>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
 
-    /// Global-scoped approved permission rules (saved to ~/.opencode/permissions.json)
-    static ref GLOBAL_RULES: Arc<Mutex<Vec<PermissionRule>>> =
-        Arc::new(Mutex::new(Vec::new()));
+/// Workspace-scoped approved permission rules (saved to project .opencode/permissions.json)
+static WORKSPACE_RULES: LazyLock<Arc<Mutex<Vec<PermissionRule>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
 
-    /// Pending permission requests (for auto-approval)
-    static ref PENDING_REQUESTS: Arc<Mutex<HashMap<String, PermissionRequestInfo>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-}
+/// Global-scoped approved permission rules (saved to ~/.opencode/permissions.json)
+static GLOBAL_RULES: LazyLock<Arc<Mutex<Vec<PermissionRule>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
+
+/// Pending permission requests (for auto-approval)
+static PENDING_REQUESTS: LazyLock<Arc<Mutex<HashMap<String, PermissionRequestInfo>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Store a response channel for a permission request
 pub async fn store_response_channel(

@@ -20,15 +20,15 @@ pub struct QuestionRequestInfo {
 }
 
 // Global question state
-lazy_static::lazy_static! {
-    /// Response channels for pending question requests
-    static ref QUESTION_RESPONSES: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+use std::sync::LazyLock;
 
-    /// Pending question requests
-    static ref PENDING_QUESTIONS: Arc<Mutex<HashMap<String, QuestionRequestInfo>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-}
+/// Response channels for pending question requests
+static QUESTION_RESPONSES: LazyLock<Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Pending question requests
+static PENDING_QUESTIONS: LazyLock<Arc<Mutex<HashMap<String, QuestionRequestInfo>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Store a response channel for a question request
 pub async fn store_response_channel(
