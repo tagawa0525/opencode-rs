@@ -77,13 +77,8 @@ impl Tool for EditTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Resolve path: if not absolute, join with cwd (like TypeScript version)
-        let file_path = Path::new(file_path_arg);
-        let resolved_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            Path::new(&ctx.cwd).join(file_path)
-        };
+        // Resolve path using context helper
+        let resolved_path = ctx.resolve_path(file_path_arg);
 
         // Validate path is within project root
         let path = validate_path(resolved_path.to_string_lossy().as_ref(), &ctx.root)?;
@@ -115,27 +110,19 @@ impl Tool for EditTool {
         }
 
         // Request permission before editing
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("filePath".to_string(), json!(display_path));
-        metadata.insert("oldString".to_string(), json!(old_string));
-        metadata.insert("newString".to_string(), json!(new_string));
-        metadata.insert("replaceAll".to_string(), json!(replace_all));
-        metadata.insert("occurrences".to_string(), json!(occurrences));
+        let metadata = HashMap::from([
+            ("filePath".to_string(), json!(display_path)),
+            ("oldString".to_string(), json!(old_string)),
+            ("newString".to_string(), json!(new_string)),
+            ("replaceAll".to_string(), json!(replace_all)),
+            ("occurrences".to_string(), json!(occurrences)),
+        ]);
 
-        let allowed = ctx
-            .ask_permission(
-                "edit".to_string(),
-                vec![display_path.clone()],
-                vec!["*".to_string()],
-                metadata,
-            )
-            .await?;
-
-        if !allowed {
-            return Ok(ToolResult::error(
-                "Permission Denied",
-                format!("User denied permission to edit file: {}", display_path),
-            ));
+        if let Some(denied) = ctx
+            .require_permission("edit", vec![display_path.clone()], metadata)
+            .await?
+        {
+            return Ok(denied);
         }
 
         // Perform replacement

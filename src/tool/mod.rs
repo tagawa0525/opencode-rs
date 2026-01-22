@@ -206,6 +206,18 @@ impl ToolContext {
         self.abort.as_ref().map(|rx| *rx.borrow()).unwrap_or(false)
     }
 
+    /// Resolve a path argument to an absolute path.
+    /// If the path is relative, it will be joined with the current working directory.
+    pub fn resolve_path(&self, path: &str) -> std::path::PathBuf {
+        use std::path::Path;
+        let p = Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            Path::new(&self.cwd).join(p)
+        }
+    }
+
     /// Request permission from user
     pub async fn ask_permission(
         &self,
@@ -231,6 +243,37 @@ impl ToolContext {
         } else {
             // No permission handler, default to deny for safety
             Ok(false)
+        }
+    }
+
+    /// Request permission and return an error result if denied.
+    /// This is a convenience method that combines permission check and denial handling.
+    pub async fn require_permission(
+        &self,
+        tool_name: &str,
+        patterns: Vec<String>,
+        metadata: HashMap<String, Value>,
+    ) -> Result<Option<ToolResult>> {
+        let allowed = self
+            .ask_permission(
+                tool_name.to_string(),
+                patterns.clone(),
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if allowed {
+            Ok(None)
+        } else {
+            let target = patterns.first().cloned().unwrap_or_default();
+            Ok(Some(ToolResult::error(
+                "Permission Denied",
+                format!(
+                    "User denied permission to execute {}: {}",
+                    tool_name, target
+                ),
+            )))
         }
     }
 
