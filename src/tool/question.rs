@@ -4,7 +4,7 @@
 //! preferences, clarify ambiguous instructions, or get decisions on implementation choices.
 
 use super::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 const DESCRIPTION: &str = r#"Use this tool when you need to ask the user questions during execution. This allows you to:
@@ -19,30 +19,12 @@ Usage notes:
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
 "#;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionOption {
-    pub label: String,
-    pub description: String,
-}
+// Use QuestionInfo and QuestionOption from the parent module (tool/mod.rs)
+// to avoid type duplication
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionInfo {
-    pub question: String,
-    pub header: String,
-    pub options: Vec<QuestionOption>,
-    #[serde(default)]
-    pub multiple: bool,
-    #[serde(default = "default_custom")]
-    pub custom: bool,
-}
-
-fn default_custom() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct QuestionParams {
-    pub questions: Vec<QuestionInfo>,
+    pub questions: Vec<super::QuestionInfo>,
 }
 
 pub struct QuestionTool;
@@ -114,20 +96,13 @@ impl Tool for QuestionTool {
         }
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let params: QuestionParams = serde_json::from_value(args)?;
 
-        // TODO: Implement actual user interaction through event bus
-        // For now, return a placeholder that explains the feature is not yet implemented
+        // Ask the questions through the handler (no conversion needed - types are unified)
+        let answers = ctx.ask_question(params.questions.clone()).await?;
 
-        // In the TypeScript version, this would:
-        // 1. Publish a question.asked event with the questions
-        // 2. Wait for a question.replied event with the answers
-        // 3. Return the answers to the LLM
-
-        // For now, we'll return empty answers as a placeholder
-        let answers: Vec<Vec<String>> = params.questions.iter().map(|_| Vec::new()).collect();
-
+        // Format the response
         let formatted = params
             .questions
             .iter()
@@ -145,10 +120,6 @@ impl Tool for QuestionTool {
 
         let mut metadata = HashMap::new();
         metadata.insert("answers".to_string(), serde_json::to_value(&answers)?);
-        metadata.insert(
-            "note".to_string(),
-            Value::String("Question tool not yet fully implemented in Rust version".to_string()),
-        );
 
         let question_count = params.questions.len();
         Ok(ToolResult {
@@ -158,8 +129,7 @@ impl Tool for QuestionTool {
                 if question_count > 1 { "s" } else { "" }
             ),
             output: format!(
-                "User has answered your questions: {}. You can now continue with the user's answers in mind.\n\n\
-                Note: The question tool is not yet fully implemented. Interactive question prompts will be added in a future update.",
+                "User has answered your questions: {}. You can now continue with the user's answers in mind.",
                 formatted
             ),
             metadata,

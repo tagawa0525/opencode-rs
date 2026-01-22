@@ -125,6 +125,25 @@ impl StreamingClient {
             "stream": true,
         });
 
+        // Check request body size (5MB limit for Anthropic API)
+        let request_body_str = serde_json::to_string(&request_body)?;
+        let request_size = request_body_str.len();
+        const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
+
+        if request_size > MAX_REQUEST_SIZE {
+            let error_msg = format!(
+                "Request payload too large: {} bytes (max: {} bytes). \
+                This usually happens when trying to make too many tool calls at once. \
+                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
+                request_size, MAX_REQUEST_SIZE
+            );
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
+            });
+            return Ok(rx);
+        }
+
         let client = self.client.clone();
         let api_key = api_key.to_string();
 
@@ -252,6 +271,39 @@ impl StreamingClient {
         // Add stream_options for OpenAI (not Copilot)
         if !params.base_url.contains("githubcopilot.com") {
             request_body["stream_options"] = serde_json::json!({"include_usage": true});
+        }
+
+        // Check request body size (5MB limit)
+        let request_body_str = match serde_json::to_string(&request_body) {
+            Ok(s) => s,
+            Err(e) => {
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx_clone
+                        .send(StreamEvent::Error(format!(
+                            "Failed to serialize request: {}",
+                            e
+                        )))
+                        .await;
+                });
+                return Ok(rx);
+            }
+        };
+        let request_size = request_body_str.len();
+        const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
+
+        if request_size > MAX_REQUEST_SIZE {
+            let error_msg = format!(
+                "Request payload too large: {} bytes (max: {} bytes). \
+                This usually happens when trying to make too many tool calls at once. \
+                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
+                request_size, MAX_REQUEST_SIZE
+            );
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
+            });
+            return Ok(rx);
         }
 
         let client = self.client.clone();

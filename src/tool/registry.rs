@@ -64,6 +64,7 @@ impl ToolRegistry {
             "webfetch".to_string(),
             Arc::new(WebFetchTool) as Arc<dyn Tool>,
         );
+        tools.insert("batch".to_string(), Arc::new(BatchTool) as Arc<dyn Tool>);
 
         Self {
             tools: RwLock::new(tools),
@@ -86,6 +87,30 @@ impl ToolRegistry {
     pub async fn list(&self) -> Vec<Arc<dyn Tool>> {
         let tools = self.tools.read().await;
         tools.values().cloned().collect()
+    }
+
+    /// Get list of tool IDs
+    pub fn list_tools(&self) -> Vec<String> {
+        // This is a blocking method to avoid async issues in batch tool
+        // We use try_read to avoid deadlocks
+        if let Ok(tools) = self.tools.try_read() {
+            tools.keys().cloned().collect()
+        } else {
+            // Fallback: return default tool list
+            vec![
+                "read".to_string(),
+                "write".to_string(),
+                "edit".to_string(),
+                "bash".to_string(),
+                "glob".to_string(),
+                "grep".to_string(),
+                "question".to_string(),
+                "todowrite".to_string(),
+                "todoread".to_string(),
+                "webfetch".to_string(),
+                "batch".to_string(),
+            ]
+        }
     }
 
     /// Get tool definitions for all registered tools

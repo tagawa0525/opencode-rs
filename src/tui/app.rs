@@ -348,6 +348,12 @@ async fn handle_single_event(app: &mut App, event: AppEvent) -> Result<()> {
         AppEvent::PermissionResponse { id, allow, scope } => {
             handle_permission_response(app, &id, allow, scope);
         }
+        AppEvent::QuestionRequested(request) => {
+            app.open_question_dialog(request);
+        }
+        AppEvent::QuestionReplied { id, answers } => {
+            handle_question_reply(app, &id, answers);
+        }
     }
     Ok(())
 }
@@ -378,6 +384,29 @@ fn handle_permission_response(
         format!("Permission granted ({}): {}", scope_text, id)
     } else {
         format!("Permission denied: {}", id)
+    };
+}
+
+/// Handle question reply event
+fn handle_question_reply(app: &mut App, id: &str, answers: Vec<Vec<String>>) {
+    // Send response to waiting tool
+    let id_clone = id.to_string();
+    let answers_clone = answers.clone();
+    tokio::spawn(async move {
+        super::llm_streaming::send_question_response(id_clone, answers_clone).await;
+    });
+
+    // Format answers for display
+    let formatted_answers: Vec<String> = answers
+        .iter()
+        .filter(|a| !a.is_empty())
+        .map(|a| a.join(", "))
+        .collect();
+
+    app.status = if formatted_answers.is_empty() {
+        "Question cancelled".to_string()
+    } else {
+        format!("Question answered: {}", formatted_answers.join(" | "))
     };
 }
 

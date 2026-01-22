@@ -44,6 +44,7 @@ pub enum DialogType {
     SessionList,
     Timeline,
     AgentSelector,
+    Question,
 }
 
 /// Autocomplete state for slash commands
@@ -114,6 +115,9 @@ pub struct PermissionRequest {
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
+// Re-export question types from tool module to avoid duplication
+pub use crate::tool::{QuestionInfo, QuestionOption, QuestionRequest};
+
 /// Dialog state for selection dialogs
 #[derive(Debug, Clone)]
 pub struct DialogState {
@@ -131,6 +135,20 @@ pub struct DialogState {
     pub verification_uri: Option<String>,
     /// For permission requests
     pub permission_request: Option<PermissionRequest>,
+    /// Selected permission option index (0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject)
+    pub selected_permission_option: usize,
+    /// For question requests
+    pub question_request: Option<QuestionRequest>,
+    /// Answers for each question (array of arrays)
+    pub question_answers: Vec<Vec<String>>,
+    /// Current question index (for multi-question mode)
+    pub current_question_index: usize,
+    /// Current option index (for navigation)
+    pub current_option_index: usize,
+    /// Custom answer input text
+    pub custom_answer_input: String,
+    /// Whether we're editing custom answer
+    pub is_editing_custom: bool,
 }
 
 impl DialogState {
@@ -148,6 +166,13 @@ impl DialogState {
             user_code: None,
             verification_uri: None,
             permission_request: None,
+            selected_permission_option: 0,
+            question_request: None,
+            question_answers: Vec::new(),
+            current_question_index: 0,
+            current_option_index: 0,
+            custom_answer_input: String::new(),
+            is_editing_custom: false,
         }
     }
 
@@ -159,6 +184,15 @@ impl DialogState {
 
     pub fn with_message(mut self, message: &str) -> Self {
         self.message = Some(message.to_string());
+        self
+    }
+
+    pub fn with_question_request(mut self, request: QuestionRequest) -> Self {
+        // Initialize answers array with empty vectors for each question
+        self.question_answers = vec![Vec::new(); request.questions.len()];
+        self.question_request = Some(request);
+        self.current_question_index = 0;
+        self.current_option_index = 0;
         self
     }
 
@@ -217,6 +251,21 @@ impl DialogState {
             self.selected_index += 1;
         }
     }
+
+    /// Move left in permission options
+    pub fn move_permission_left(&mut self) {
+        if self.selected_permission_option > 0 {
+            self.selected_permission_option -= 1;
+        }
+    }
+
+    /// Move right in permission options
+    pub fn move_permission_right(&mut self) {
+        // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
+        if self.selected_permission_option < 4 {
+            self.selected_permission_option += 1;
+        }
+    }
 }
 
 /// Application events for the TUI event loop
@@ -236,6 +285,11 @@ pub enum AppEvent {
         id: String,
         allow: bool,
         scope: crate::tool::PermissionScope,
+    },
+    QuestionRequested(QuestionRequest),
+    QuestionReplied {
+        id: String,
+        answers: Vec<Vec<String>>,
     },
     // OAuth events
     DeviceCodeReceived {

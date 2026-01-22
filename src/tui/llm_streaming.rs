@@ -21,6 +21,11 @@ pub async fn send_permission_response(id: String, allow: bool, scope: tool::Perm
     crate::permission_state::send_permission_response(id, allow, scope).await;
 }
 
+/// Send question response to waiting tool
+pub async fn send_question_response(id: String, answers: Vec<Vec<String>>) {
+    crate::question_state::send_question_response(id, answers).await;
+}
+
 /// Context for streaming operations
 struct StreamContext {
     provider_id: String,
@@ -136,12 +141,14 @@ async fn initialize_stream_context(
     // Create TUI permission handler using shared implementation
     let permission_handler =
         crate::permission_state::create_tui_permission_handler(event_tx.clone());
+    let question_handler = crate::question_state::create_tui_question_handler(event_tx.clone());
 
     let tool_ctx = Arc::new(
         ToolContext::new("", "", "tui")
             .with_cwd(cwd.clone())
             .with_root(cwd.clone())
-            .with_permission_handler(permission_handler),
+            .with_permission_handler(permission_handler)
+            .with_question_handler(question_handler),
     );
 
     // Generate system prompt
@@ -292,24 +299,25 @@ async fn handle_tool_calls(
     result: StreamResult,
     mut assistant_parts: Vec<ContentPart>,
     doom_detector: &mut DoomLoopDetector,
-    step: i32,
+    _step: i32,
 ) -> Result<bool> {
     // Check for doom loop
     doom_detector.add_calls(&result.pending_calls);
 
     if let Some((tool_name, args)) = doom_detector.check_doom_loop() {
-        return handle_doom_loop(ctx, &tool_name, &args, step).await;
-    }
-
-    // Check permissions for each tool call
-    let approved_calls = check_tool_permissions(ctx, &result.pending_calls, step).await;
-
-    if approved_calls.is_empty() {
+        // TODO: Implement doom loop handling
+        let _ = ctx
+            .event_tx
+            .send(AppEvent::StreamError(format!(
+                "Doom loop detected: {} called repeatedly with same arguments: {}",
+                tool_name, args
+            )))
+            .await;
         return Ok(false);
     }
 
     // Add tool use parts to assistant message
-    for call in &approved_calls {
+    for call in &result.pending_calls {
         let args: serde_json::Value =
             serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
 
@@ -326,8 +334,8 @@ async fn handle_tool_calls(
         content: build_chat_content(assistant_parts),
     });
 
-    // Execute tools
-    let tool_results = execute_tools(ctx, approved_calls).await;
+    // Execute tools - permission checks happen inside each tool's execute method
+    let tool_results = execute_tools(ctx, result.pending_calls).await;
 
     // Add tool results to conversation
     messages.push(ChatMessage {
@@ -336,89 +344,6 @@ async fn handle_tool_calls(
     });
 
     Ok(true)
-}
-
-/// Handle doom loop detection
-async fn handle_doom_loop(
-    ctx: &StreamContext,
-    tool_name: &str,
-    args: &str,
-    step: i32,
-) -> Result<bool> {
-    let req_id = format!("doom_loop_{}", step);
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("tool_name".to_string(), serde_json::json!(tool_name));
-    metadata.insert("args".to_string(), serde_json::json!(args));
-    metadata.insert(
-        "threshold".to_string(),
-        serde_json::json!(tool::DOOM_LOOP_THRESHOLD),
-    );
-
-    let request = PermissionRequest {
-        id: req_id,
-        permission: "doom_loop".to_string(),
-        patterns: vec![tool_name.to_string()],
-        always: vec!["doom_loop".to_string()],
-        metadata,
-    };
-
-    let _ = ctx
-        .event_tx
-        .send(AppEvent::PermissionRequested(request))
-        .await;
-
-    // TODO: Implement async permission waiting
-    // For now, break the loop
-    Ok(false)
-}
-
-/// Check permissions for tool calls
-async fn check_tool_permissions(
-    ctx: &StreamContext,
-    calls: &[PendingToolCall],
-    step: i32,
-) -> Vec<PendingToolCall> {
-    let mut approved_calls = Vec::new();
-
-    for call in calls {
-        let action = ctx.permission_checker.check_tool(&call.name);
-
-        match action {
-            crate::config::PermissionAction::Allow => {
-                approved_calls.push(call.clone());
-            }
-            crate::config::PermissionAction::Deny => {
-                // Skip this call
-            }
-            crate::config::PermissionAction::Ask => {
-                request_tool_permission(ctx, call, step).await;
-                // TODO: Implement proper async waiting
-            }
-        }
-    }
-
-    approved_calls
-}
-
-/// Request permission for a tool call
-async fn request_tool_permission(ctx: &StreamContext, call: &PendingToolCall, step: i32) {
-    let req_id = format!("tool_{}_{}", call.id, step);
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("tool_name".to_string(), serde_json::json!(call.name));
-    metadata.insert("arguments".to_string(), serde_json::json!(call.arguments));
-
-    let request = PermissionRequest {
-        id: req_id,
-        permission: call.name.clone(),
-        patterns: vec!["*".to_string()],
-        always: vec!["*".to_string()],
-        metadata,
-    };
-
-    let _ = ctx
-        .event_tx
-        .send(AppEvent::PermissionRequested(request))
-        .await;
 }
 
 /// Execute approved tools

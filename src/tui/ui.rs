@@ -50,8 +50,6 @@ pub fn render(frame: &mut Frame, app: &App) {
         placeholder: "Type a message... (Enter to send, Shift+Enter for newline)",
         focused: true,
         theme,
-        is_processing: app.is_processing,
-        spinner_frame: app.spinner_frame,
     };
     frame.render_widget(input, chunks[2]);
 
