@@ -11,8 +11,8 @@ use super::types::AppEvent;
 use crate::config::Config;
 use crate::permission::PermissionChecker;
 use crate::provider::{
-    self, ChatContent, ChatMessage, ContentPart, Model, StreamEvent, StreamingClient,
-    ToolDefinition,
+    self, ChatContent, ChatMessage, ContentPart, Model, OpenAIRequest, StreamEvent,
+    StreamingClient, ToolDefinition,
 };
 use crate::tool::{self, DoomLoopDetector, PendingToolCall, ToolCallTracker, ToolContext};
 
@@ -192,16 +192,14 @@ async fn create_provider_stream(
                 .url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1");
+            let request = OpenAIRequest {
+                messages: messages.to_vec(),
+                system: Some(ctx.system_prompt.clone()),
+                tools: ctx.tool_defs.clone(),
+                max_tokens: ctx.model.limit.output,
+            };
             client
-                .stream_openai(
-                    &ctx.api_key,
-                    base_url,
-                    &ctx.model.api.id,
-                    messages.to_vec(),
-                    Some(ctx.system_prompt.clone()),
-                    ctx.tool_defs.clone(),
-                    ctx.model.limit.output,
-                )
+                .stream_openai(&ctx.api_key, base_url, &ctx.model.api.id, request)
                 .await
         }
         "copilot" => {
@@ -512,16 +510,14 @@ async fn dispatch_stream(
                 .url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1");
+            let request = OpenAIRequest {
+                messages,
+                system: Some(system_prompt),
+                tools: tool_defs,
+                max_tokens: model.limit.output,
+            };
             client
-                .stream_openai(
-                    api_key,
-                    base_url,
-                    &model.api.id,
-                    messages,
-                    Some(system_prompt),
-                    tool_defs,
-                    model.limit.output,
-                )
+                .stream_openai(api_key, base_url, &model.api.id, request)
                 .await
         }
         "copilot" => {

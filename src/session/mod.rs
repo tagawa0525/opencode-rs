@@ -9,8 +9,6 @@ pub mod system;
 mod types;
 
 pub use message::*;
-#[allow(unused_imports)]
-pub use types::*;
 
 use crate::bus::{self, Event};
 use crate::id::{self, IdPrefix};

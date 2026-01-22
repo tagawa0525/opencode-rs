@@ -12,6 +12,15 @@ use tokio::sync::mpsc;
 pub use super::parsers::{AnthropicParser, OpenAIParser};
 pub use super::stream_types::*;
 
+/// Request parameters for OpenAI-compatible API calls
+#[derive(Debug, Clone)]
+pub struct OpenAIRequest {
+    pub messages: Vec<ChatMessage>,
+    pub system: Option<String>,
+    pub tools: Vec<ToolDefinition>,
+    pub max_tokens: u64,
+}
+
 /// Parameters for OpenAI-compatible API streaming
 pub struct OpenAIStreamParams {
     pub api_key: String,
@@ -221,25 +230,21 @@ impl StreamingClient {
     }
 
     /// Stream from OpenAI-compatible API
-    #[allow(clippy::too_many_arguments)]
     pub async fn stream_openai(
         &self,
         api_key: &str,
         base_url: &str,
         model: &str,
-        messages: Vec<ChatMessage>,
-        system: Option<String>,
-        tools: Vec<ToolDefinition>,
-        max_tokens: u64,
+        request: OpenAIRequest,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
         let params = OpenAIStreamParams {
             api_key: api_key.to_string(),
             base_url: base_url.to_string(),
             model: model.to_string(),
-            messages,
-            system,
-            tools,
-            max_tokens,
+            messages: request.messages,
+            system: request.system,
+            tools: request.tools,
+            max_tokens: request.max_tokens,
             request_modifier: None,
         };
         self.stream_openai_impl(params).await

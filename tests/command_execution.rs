@@ -3,7 +3,6 @@ use opencode::slash_command::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_execute_markdown_command() {

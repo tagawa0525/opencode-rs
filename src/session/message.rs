@@ -23,7 +23,6 @@ pub enum MessageRole {
 /// Base message information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role")]
-#[allow(clippy::large_enum_variant)]
 pub enum Message {
     #[serde(rename = "user")]
     User(UserMessage),
@@ -90,8 +89,6 @@ impl Message {
             agent: agent.to_string(),
             provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
-            #[allow(deprecated)]
-            mode: agent.to_string(), // deprecated
             path,
             error: None,
             summary: None,
@@ -174,8 +171,6 @@ pub struct AssistantMessage {
     pub agent: String,
     pub provider_id: String,
     pub model_id: String,
-    #[deprecated(note = "Use agent instead")]
-    pub mode: String,
     pub path: MessagePath,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<MessageError>,
@@ -224,15 +219,14 @@ pub struct UserSummary {
 /// Message errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name")]
-#[allow(clippy::enum_variant_names)]
 pub enum MessageError {
     #[serde(rename = "ProviderAuthError")]
-    AuthError {
+    Auth {
         provider_id: String,
         message: String,
     },
     #[serde(rename = "APIError")]
-    ApiError {
+    Api {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         status_code: Option<u16>,
@@ -243,9 +237,9 @@ pub enum MessageError {
         response_body: Option<String>,
     },
     #[serde(rename = "MessageOutputLengthError")]
-    OutputLengthError {},
+    OutputLength {},
     #[serde(rename = "MessageAbortedError")]
-    AbortedError { message: String },
+    Aborted { message: String },
 }
 
 /// Token usage statistics
@@ -415,7 +409,7 @@ mod tests {
 
         #[test]
         fn test_auth_error_serialize() {
-            let error = MessageError::AuthError {
+            let error = MessageError::Auth {
                 provider_id: "anthropic".to_string(),
                 message: "Invalid API key".to_string(),
             };
@@ -426,7 +420,7 @@ mod tests {
 
         #[test]
         fn test_api_error_serialize() {
-            let error = MessageError::ApiError {
+            let error = MessageError::Api {
                 message: "Rate limit exceeded".to_string(),
                 status_code: Some(429),
                 is_retryable: true,
@@ -441,14 +435,14 @@ mod tests {
 
         #[test]
         fn test_output_length_error_serialize() {
-            let error = MessageError::OutputLengthError {};
+            let error = MessageError::OutputLength {};
             let json = serde_json::to_string(&error).unwrap();
             assert!(json.contains(r#""name":"MessageOutputLengthError""#));
         }
 
         #[test]
         fn test_aborted_error_serialize() {
-            let error = MessageError::AbortedError {
+            let error = MessageError::Aborted {
                 message: "User cancelled".to_string(),
             };
             let json = serde_json::to_string(&error).unwrap();

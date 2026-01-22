@@ -2,7 +2,9 @@
 
 use crate::config::Config;
 use crate::permission::PermissionChecker;
-use crate::provider::{self, ChatContent, ChatMessage, ContentPart, StreamEvent, ToolDefinition};
+use crate::provider::{
+    self, ChatContent, ChatMessage, ContentPart, OpenAIRequest, StreamEvent, ToolDefinition,
+};
 use crate::session::{CreateSessionOptions, ModelRef, Session};
 use crate::tool::{self, DoomLoopDetector, PendingToolCall, ToolCallTracker, ToolContext};
 use anyhow::Result;
@@ -230,16 +232,14 @@ async fn create_provider_stream(
                 .model_api_url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1");
+            let request = OpenAIRequest {
+                messages: messages.to_vec(),
+                system: Some(ctx.system_prompt.clone()),
+                tools: ctx.tool_defs.clone(),
+                max_tokens: ctx.max_tokens,
+            };
             client
-                .stream_openai(
-                    &ctx.api_key,
-                    base_url,
-                    &ctx.model_api_id,
-                    messages.to_vec(),
-                    Some(ctx.system_prompt.clone()),
-                    ctx.tool_defs.clone(),
-                    ctx.max_tokens,
-                )
+                .stream_openai(&ctx.api_key, base_url, &ctx.model_api_id, request)
                 .await
         }
         "copilot" => {
