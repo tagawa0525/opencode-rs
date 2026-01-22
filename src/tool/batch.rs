@@ -227,6 +227,28 @@ impl Tool for BatchTool {
             }
         }
 
+        // Build summarized details to avoid payload size issues
+        let summarized_details: Vec<_> = all_results
+            .iter()
+            .map(|r| {
+                if r.success {
+                    // For successful calls, only include minimal info
+                    json!({
+                        "success": true,
+                        "tool": r.tool,
+                        "title": r.result.as_ref().map(|res| &res.title),
+                    })
+                } else {
+                    // For failed calls, include error details
+                    json!({
+                        "success": false,
+                        "tool": r.tool,
+                        "error": r.error,
+                    })
+                }
+            })
+            .collect();
+
         // Build metadata
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("total_calls".to_string(), json!(total_calls));
@@ -238,7 +260,7 @@ impl Tool for BatchTool {
             "tools".to_string(),
             json!(all_results.iter().map(|r| &r.tool).collect::<Vec<_>>()),
         );
-        metadata.insert("details".to_string(), json!(all_results));
+        metadata.insert("details".to_string(), json!(summarized_details));
 
         let title = if batch_count > 1 {
             format!(
@@ -252,13 +274,25 @@ impl Tool for BatchTool {
             )
         };
 
-        Ok(ToolResult {
+        let result = ToolResult {
             title,
             output: output_message,
             metadata,
             truncated: false,
             attachments,
-        })
+        };
+
+        // Log the size of the result for debugging
+        if let Ok(json_str) = serde_json::to_string(&result) {
+            let size_bytes = json_str.len();
+            tracing::info!(
+                "Batch tool result size: {} bytes ({} KB)",
+                size_bytes,
+                size_bytes / 1024
+            );
+        }
+
+        Ok(result)
     }
 }
 
@@ -328,16 +362,9 @@ async fn execute_single_call(
         };
     }
 
-    // Save "running" state
-    let _ = save_tool_part(
-        &part_id,
-        ctx,
-        &call.tool,
-        call.parameters.clone(),
-        call_start_time,
-        ToolExecutionState::Running,
-    )
-    .await;
+    // Note: We intentionally do NOT save individual tool results to avoid
+    // adding them to the conversation context. Only the batch tool's summary
+    // result should be added to the conversation to prevent payload overflow.
 
     // Execute the tool
     let registry = registry::registry();
@@ -345,36 +372,14 @@ async fn execute_single_call(
         .execute(&call.tool, call.parameters.clone(), ctx)
         .await
     {
-        Ok(result) => {
-            let _ = save_tool_part(
-                &part_id,
-                ctx,
-                &call.tool,
-                call.parameters,
-                call_start_time,
-                ToolExecutionState::Completed(&result),
-            )
-            .await;
-
-            BatchResult {
-                success: true,
-                tool: call.tool,
-                result: Some(result),
-                error: None,
-            }
-        }
+        Ok(result) => BatchResult {
+            success: true,
+            tool: call.tool,
+            result: Some(result),
+            error: None,
+        },
         Err(e) => {
             let error_msg = e.to_string();
-
-            let _ = save_tool_part(
-                &part_id,
-                ctx,
-                &call.tool,
-                call.parameters,
-                call_start_time,
-                ToolExecutionState::Error(&error_msg),
-            )
-            .await;
 
             BatchResult {
                 success: false,

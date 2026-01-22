@@ -131,12 +131,39 @@ impl StreamingClient {
         const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
         if request_size > MAX_REQUEST_SIZE {
-            let error_msg = format!(
-                "Request payload too large: {} bytes (max: {} bytes). \
-                This usually happens when trying to make too many tool calls at once. \
-                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
-                request_size, MAX_REQUEST_SIZE
-            );
+            // Count tool calls to provide better guidance
+            let tool_call_count = request_body
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .and_then(|msgs| msgs.last())
+                .and_then(|msg| msg.get("content"))
+                .and_then(|content| content.as_array())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let error_msg = if tool_call_count > 10 {
+                format!(
+                    "Request payload too large: {} bytes (max: {} bytes). \
+                    You are trying to make {} tool calls at once. \
+                    \n\nIMPORTANT: Use the 'batch' tool instead! \
+                    \n\nExample: \
+                    \n{{\n  \"tool\": \"batch\",\n  \"parameters\": {{\n    \"tool_calls\": [\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}},\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}}\n    ]\n  }}\n}} \
+                    \n\nThe batch tool automatically handles large numbers of tool calls efficiently.",
+                    request_size, MAX_REQUEST_SIZE, tool_call_count
+                )
+            } else {
+                format!(
+                    "Request payload too large: {} bytes (max: {} bytes). \
+                    This usually happens when trying to make too many tool calls at once. \
+                    Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
+                    request_size, MAX_REQUEST_SIZE
+                )
+            };
             let tx_clone = tx.clone();
             tokio::spawn(async move {
                 let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
@@ -293,12 +320,39 @@ impl StreamingClient {
         const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
         if request_size > MAX_REQUEST_SIZE {
-            let error_msg = format!(
-                "Request payload too large: {} bytes (max: {} bytes). \
-                This usually happens when trying to make too many tool calls at once. \
-                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
-                request_size, MAX_REQUEST_SIZE
-            );
+            // Count tool calls to provide better guidance
+            let tool_call_count = request_body
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .and_then(|msgs| msgs.last())
+                .and_then(|msg| msg.get("content"))
+                .and_then(|content| content.as_array())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let error_msg = if tool_call_count > 10 {
+                format!(
+                    "Request payload too large: {} bytes (max: {} bytes). \
+                    You are trying to make {} tool calls at once. \
+                    \n\nIMPORTANT: Use the 'batch' tool instead! \
+                    \n\nExample: \
+                    \n{{\n  \"tool\": \"batch\",\n  \"parameters\": {{\n    \"tool_calls\": [\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}},\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}}\n    ]\n  }}\n}} \
+                    \n\nThe batch tool automatically handles large numbers of tool calls efficiently.",
+                    request_size, MAX_REQUEST_SIZE, tool_call_count
+                )
+            } else {
+                format!(
+                    "Request payload too large: {} bytes (max: {} bytes). \
+                    This usually happens when trying to make too many tool calls at once. \
+                    Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
+                    request_size, MAX_REQUEST_SIZE
+                )
+            };
             let tx_clone = tx.clone();
             tokio::spawn(async move {
                 let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;

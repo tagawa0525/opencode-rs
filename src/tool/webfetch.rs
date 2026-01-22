@@ -200,7 +200,7 @@ impl Tool for WebFetchTool {
         let title = format!("{} ({})", params.url, content_type);
 
         // Handle content based on requested format and actual content type
-        let output = match params.format.as_str() {
+        let mut output = match params.format.as_str() {
             "markdown" => {
                 if content_type.contains("text/html") {
                     convert_html_to_markdown(&content)
@@ -217,6 +217,13 @@ impl Tool for WebFetchTool {
             }
             _ => content,
         };
+
+        // Truncate output to prevent payload overflow (max 10KB per result)
+        const MAX_OUTPUT_SIZE: usize = 10 * 1024; // 10KB
+        if output.len() > MAX_OUTPUT_SIZE {
+            output.truncate(MAX_OUTPUT_SIZE);
+            output.push_str("\n\n[Output truncated: content exceeds 10KB limit]");
+        }
 
         Ok(ToolResult::success(title, output))
     }
