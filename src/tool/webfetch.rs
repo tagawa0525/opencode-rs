@@ -15,11 +15,12 @@ const DESCRIPTION: &str = r#"- Fetches content from a specified URL
 
 Usage notes:
   - IMPORTANT: if another tool is present that offers better web fetching capabilities, is more targeted to the task, or has fewer restrictions, prefer using that tool instead of this one.
+  - IMPORTANT: If you need to fetch more than 5 URLs, use the 'batch' tool to avoid context overflow. Each result is limited to 2KB to prevent token limit issues.
   - The URL must be a fully-formed valid URL
   - HTTP URLs will be automatically upgraded to HTTPS
   - Format options: "markdown" (default), "text", or "html"
   - This tool is read-only and does not modify any files
-  - Results may be summarized if the content is very large
+  - Results are automatically truncated to 2KB if they exceed this limit
 "#;
 
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024; // 5MB
@@ -218,11 +219,12 @@ impl Tool for WebFetchTool {
             _ => content,
         };
 
-        // Truncate output to prevent payload overflow (max 10KB per result)
-        const MAX_OUTPUT_SIZE: usize = 10 * 1024; // 10KB
+        // Truncate output to prevent payload overflow (max 2KB per result)
+        // This is especially important when making many webfetch calls for APIs like crates.io
+        const MAX_OUTPUT_SIZE: usize = 2 * 1024; // 2KB
         if output.len() > MAX_OUTPUT_SIZE {
             output.truncate(MAX_OUTPUT_SIZE);
-            output.push_str("\n\n[Output truncated: content exceeds 10KB limit]");
+            output.push_str("\n\n[Output truncated: content exceeds 2KB limit to prevent context overflow]");
         }
 
         Ok(ToolResult::success(title, output))
