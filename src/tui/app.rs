@@ -25,8 +25,7 @@ pub use super::state::App;
 
 // Re-export types for backward compatibility
 pub use super::types::{
-    AppEvent, AutocompleteState, CommandItem, DialogState, DialogType, DisplayMessage, MessagePart,
-    PermissionRequest, SelectItem,
+    AppEvent, AutocompleteState,
 };
 use crate::config::Config;
 use crate::provider;

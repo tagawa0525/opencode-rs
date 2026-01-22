@@ -3,7 +3,6 @@
 use super::*;
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::path::Path;
 use tokio::fs;
 
 /// Tool for editing files via string replacement

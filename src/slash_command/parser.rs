@@ -1,6 +1,5 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use regex::Regex;
-use std::path::Path;
 use tokio::process::Command;
 
 /// Parsed slash command with name and arguments

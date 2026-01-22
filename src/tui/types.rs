@@ -116,7 +116,7 @@ pub struct PermissionRequest {
 }
 
 // Re-export question types from tool module to avoid duplication
-pub use crate::tool::{QuestionInfo, QuestionOption, QuestionRequest};
+pub use crate::tool::QuestionRequest;
 
 /// Dialog state for selection dialogs
 #[derive(Debug, Clone)]

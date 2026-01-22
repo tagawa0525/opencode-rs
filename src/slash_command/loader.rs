@@ -1,4 +1,4 @@
-use super::markdown::{parse_markdown_file, MarkdownFile};
+use super::markdown::parse_markdown_file;
 use super::template::TemplateCommand;
 use super::SlashCommand;
 use crate::config::CommandConfig;
@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs;
 use ignore::WalkBuilder;
 
 /// Load slash commands from markdown files in the .opencode/command directory
@@ -198,6 +197,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_command_from_file() {
         use tempfile::TempDir;
+        use tokio::fs;
 
         let temp_dir = TempDir::new().unwrap();
         let command_dir = temp_dir.path().join("command");

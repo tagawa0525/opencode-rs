@@ -1,7 +1,7 @@
 use super::{CommandContext, CommandInfo, CommandOutput, SlashCommand};
 use crate::config::CommandConfig;
 use crate::slash_command::parser::{
-    expand_template, expand_template_async, extract_file_references,
+    expand_template_async, extract_file_references,
 };
 use anyhow::Result;
 use async_trait::async_trait;

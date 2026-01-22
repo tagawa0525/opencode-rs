@@ -9,8 +9,8 @@ use std::sync::Arc;
 use super::input::Action;
 use super::theme::Theme;
 use super::types::{
-    AutocompleteState, CommandItem, DialogState, DialogType, DisplayMessage, MessagePart,
-    PermissionRequest, SelectItem,
+    AutocompleteState, DialogState, DialogType, DisplayMessage, MessagePart,
+    PermissionRequest,
 };
 use crate::config::Config;
 use crate::provider::{self, Provider};
