@@ -161,7 +161,12 @@ impl Tool for BatchTool {
             let mut futures = Vec::new();
 
             for call in batch {
-                let ctx = ctx.clone();
+                let mut ctx = ctx.clone();
+                // Set is_in_batch flag for child tools (e.g., webfetch can use this to increase output limit)
+                ctx.extra.insert(
+                    "is_in_batch".to_string(),
+                    serde_json::json!(true)
+                );
                 let available_tools = available_tools.clone();
                 let call = call.clone();
 
@@ -501,18 +506,3 @@ async fn calculate_batch_size(ctx: &ToolContext) -> usize {
     }
 }
 
-/// Get model context size from models.dev
-async fn get_model_context_size(model_id: &str) -> Result<u64> {
-    // Load models from models.dev
-    let providers: std::collections::HashMap<String, provider::ModelsDevProvider> =
-        provider::get().await?;
-
-    // Search for the model across all providers
-    for provider_info in providers.values() {
-        if let Some(model) = provider_info.models.get(model_id) {
-            return Ok(model.limit.context);
-        }
-    }
-
-    anyhow::bail!("Model {} not found in models.dev", model_id)
-}

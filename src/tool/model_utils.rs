@@ -1,0 +1,198 @@
+//! Model-aware utility functions for tools.
+//!
+//! This module provides common utilities for tools that need to adapt
+//! their behavior based on the model's context size.
+
+use super::*;
+use crate::provider;
+
+/// Get model context size from models.dev
+pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
+    // Load models from models.dev
+    let providers: std::collections::HashMap<String, provider::ModelsDevProvider> =
+        provider::get().await?;
+
+    // Search for the model across all providers
+    for provider_info in providers.values() {
+        if let Some(model) = provider_info.models.get(model_id) {
+            return Ok(model.limit.context);
+        }
+    }
+
+    anyhow::bail!("Model {} not found in models.dev", model_id)
+}
+
+/// Calculate appropriate output limit for webfetch tool.
+///
+/// The limit is calculated based on the model's context size:
+/// - Direct calls: 1% of context (min 1KB, max 16KB)
+/// - Batch calls: 2% of context (min 1KB, max 16KB)
+/// - Default: 2KB if model_id is unknown
+///
+/// This ensures larger context models can receive more detailed content
+/// while preventing payload overflow issues.
+///
+/// # Examples
+/// - Claude Opus 4.5 (200K): direct 8KB, batch 16KB
+/// - GPT-4 (128K): direct 5KB, batch 10KB
+/// - Small models (32K): direct 1KB, batch 2.6KB
+pub async fn calculate_webfetch_output_limit(
+    ctx: &ToolContext,
+    is_in_batch: bool,
+) -> usize {
+    // Default fallback
+    const DEFAULT_LIMIT: usize = 2 * 1024; // 2KB
+    const MIN_LIMIT: usize = 1 * 1024; // 1KB
+    const MAX_LIMIT: usize = 16 * 1024; // 16KB
+    const BYTES_PER_TOKEN: usize = 4;
+
+    // If no model ID is provided, use default
+    let Some(model_id) = &ctx.model_id else {
+        tracing::debug!("No model ID provided, using default webfetch limit (2KB)");
+        return DEFAULT_LIMIT;
+    };
+
+    // Get model context size from models.dev
+    match get_model_context_size(model_id).await {
+        Ok(context_size) => {
+            // Calculate limit based on context percentage
+            let percentage = if is_in_batch { 0.02 } else { 0.01 };
+            let limit_tokens = (context_size as f64 * percentage) as usize;
+            let limit_bytes = limit_tokens * BYTES_PER_TOKEN;
+
+            // Clamp to min/max bounds
+            let clamped = limit_bytes.max(MIN_LIMIT).min(MAX_LIMIT);
+
+            tracing::debug!(
+                "Model {} context: {}, webfetch limit: {} bytes ({}KB), is_in_batch: {}",
+                model_id,
+                context_size,
+                clamped,
+                clamped / 1024,
+                is_in_batch
+            );
+
+            clamped
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to get context size for model {}: {}. Using default webfetch limit (2KB).",
+                model_id,
+                e
+            );
+            DEFAULT_LIMIT
+        }
+    }
+}
+
+/// Smart truncation that respects line boundaries and UTF-8 encoding.
+///
+/// This function truncates content at line boundaries to avoid cutting
+/// in the middle of sentences. It also ensures UTF-8 safety by checking
+/// character boundaries.
+///
+/// # Arguments
+/// * `content` - The content to truncate
+/// * `max_bytes` - Maximum size in bytes
+///
+/// # Returns
+/// Truncated content that is:
+/// - At most `max_bytes` in size
+/// - Ends at a line boundary (unless a single line exceeds the limit)
+/// - UTF-8 safe (no broken multibyte characters)
+pub fn smart_truncate(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_string();
+    }
+
+    // Find the last line boundary before max_bytes
+    let mut truncate_at = 0;
+    let mut current_pos = 0;
+
+    for line in content.lines() {
+        let line_len = line.len() + 1; // +1 for newline
+        if current_pos + line_len > max_bytes {
+            break;
+        }
+        current_pos += line_len;
+        truncate_at = current_pos;
+    }
+
+    // If we couldn't fit even one line, truncate at max_bytes with UTF-8 safety
+    if truncate_at == 0 {
+        // Find the last valid UTF-8 boundary before max_bytes
+        let mut pos = max_bytes.min(content.len());
+        while pos > 0 && !content.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        return content[..pos].to_string();
+    }
+
+    // Return truncated content at line boundary
+    content[..truncate_at].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_smart_truncate_within_limit() {
+        let content = "Hello\nWorld\n";
+        let result = smart_truncate(content, 100);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_smart_truncate_at_line_boundary() {
+        let content = "Line 1\nLine 2\nLine 3\n";
+        let result = smart_truncate(content, 14); // Fits "Line 1\nLine 2\n"
+        assert_eq!(result, "Line 1\nLine 2\n");
+    }
+
+    #[test]
+    fn test_smart_truncate_single_long_line() {
+        let content = "ThisIsAVeryLongLineThatExceedsTheLimit";
+        let result = smart_truncate(content, 10);
+        assert_eq!(result, "ThisIsAVer");
+    }
+
+    #[test]
+    fn test_smart_truncate_utf8_safe() {
+        let content = "Hello 世界\nNext line\n";
+        // "Hello 世界\n" = "Hello " (6 bytes) + "世界" (6 bytes) + "\n" (1 byte) = 13 bytes
+        let result = smart_truncate(content, 13);
+        assert_eq!(result, "Hello 世界\n");
+    }
+
+    #[test]
+    fn test_smart_truncate_utf8_boundary() {
+        let content = "Hello 世界";
+        // Truncate in the middle of a multibyte character
+        let result = smart_truncate(content, 8); // Would be in middle of "世"
+        // Should find valid UTF-8 boundary (before "世")
+        assert_eq!(result, "Hello ");
+    }
+
+    #[tokio::test]
+    async fn test_calculate_output_limit_no_model() {
+        let ctx = ToolContext::new("test-session", "test-message", "test-agent");
+        let limit = calculate_webfetch_output_limit(&ctx, false).await;
+        assert_eq!(limit, 2 * 1024); // Default 2KB
+    }
+
+    #[tokio::test]
+    async fn test_calculate_output_limit_direct_vs_batch() {
+        // This test assumes we can't actually fetch from models.dev in tests,
+        // so it will use the default fallback
+        let ctx = ToolContext::new("test-session", "test-message", "test-agent")
+            .with_model_id("claude-sonnet-4-5".to_string());
+
+        let direct_limit = calculate_webfetch_output_limit(&ctx, false).await;
+        let batch_limit = calculate_webfetch_output_limit(&ctx, true).await;
+
+        // In the absence of real model data, both should default to 2KB
+        // But if models.dev is available, batch should be 2x direct
+        assert!(batch_limit >= direct_limit);
+    }
+}
