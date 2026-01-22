@@ -22,6 +22,22 @@ pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
     anyhow::bail!("Model {} not found in models.dev", model_id)
 }
 
+// Constants for output limit calculation
+const DEFAULT_LIMIT: usize = 2 * 1024; // 2KB
+const MIN_LIMIT: usize = 1024; // 1KB
+const MAX_LIMIT: usize = 16 * 1024; // 16KB
+const BYTES_PER_TOKEN: usize = 4;
+
+/// Calculate output limit from a given context size (pure function).
+///
+/// This is the core calculation logic, separated for testability.
+fn calculate_limit_from_context_size(context_size: u64, is_in_batch: bool) -> usize {
+    let percentage = if is_in_batch { 0.02 } else { 0.01 };
+    let limit_tokens = (context_size as f64 * percentage) as usize;
+    let limit_bytes = limit_tokens * BYTES_PER_TOKEN;
+    limit_bytes.clamp(MIN_LIMIT, MAX_LIMIT)
+}
+
 /// Calculate appropriate output limit for webfetch tool.
 ///
 /// The limit is calculated based on the model's context size:
@@ -37,12 +53,6 @@ pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
 /// - GPT-4 (128K): direct 5KB, batch 10KB
 /// - Small models (32K): direct 1KB, batch 2.6KB
 pub async fn calculate_webfetch_output_limit(ctx: &ToolContext, is_in_batch: bool) -> usize {
-    // Default fallback
-    const DEFAULT_LIMIT: usize = 2 * 1024; // 2KB
-    const MIN_LIMIT: usize = 1024; // 1KB
-    const MAX_LIMIT: usize = 16 * 1024; // 16KB
-    const BYTES_PER_TOKEN: usize = 4;
-
     // If no model ID is provided, use default
     let Some(model_id) = &ctx.model_id else {
         tracing::debug!("No model ID provided, using default webfetch limit (2KB)");
@@ -52,24 +62,18 @@ pub async fn calculate_webfetch_output_limit(ctx: &ToolContext, is_in_batch: boo
     // Get model context size from models.dev
     match get_model_context_size(model_id).await {
         Ok(context_size) => {
-            // Calculate limit based on context percentage
-            let percentage = if is_in_batch { 0.02 } else { 0.01 };
-            let limit_tokens = (context_size as f64 * percentage) as usize;
-            let limit_bytes = limit_tokens * BYTES_PER_TOKEN;
-
-            // Clamp to min/max bounds
-            let clamped = limit_bytes.clamp(MIN_LIMIT, MAX_LIMIT);
+            let limit = calculate_limit_from_context_size(context_size, is_in_batch);
 
             tracing::debug!(
                 "Model {} context: {}, webfetch limit: {} bytes ({}KB), is_in_batch: {}",
                 model_id,
                 context_size,
-                clamped,
-                clamped / 1024,
+                limit,
+                limit / 1024,
                 is_in_batch
             );
 
-            clamped
+            limit
         }
         Err(e) => {
             tracing::warn!(
@@ -178,18 +182,58 @@ mod tests {
         assert_eq!(limit, 2 * 1024); // Default 2KB
     }
 
-    #[tokio::test]
-    async fn test_calculate_output_limit_direct_vs_batch() {
-        // This test assumes we can't actually fetch from models.dev in tests,
-        // so it will use the default fallback
-        let ctx = ToolContext::new("test-session", "test-message", "test-agent")
-            .with_model_id("claude-sonnet-4-5".to_string());
+    #[test]
+    fn test_calculate_limit_from_context_size_direct_vs_batch() {
+        // Test various context sizes to ensure batch >= direct always holds
+        let test_cases = [
+            32_000u64,   // Small model
+            128_000,     // GPT-4 class
+            200_000,     // Claude Opus 4.5
+            500_000,     // Large context
+            1_000_000,   // Very large context
+        ];
 
-        let direct_limit = calculate_webfetch_output_limit(&ctx, false).await;
-        let batch_limit = calculate_webfetch_output_limit(&ctx, true).await;
+        for context_size in test_cases {
+            let direct = calculate_limit_from_context_size(context_size, false);
+            let batch = calculate_limit_from_context_size(context_size, true);
 
-        // In the absence of real model data, both should default to 2KB
-        // But if models.dev is available, batch should be 2x direct
-        assert!(batch_limit >= direct_limit);
+            assert!(
+                batch >= direct,
+                "For context_size {}: batch ({}) should be >= direct ({})",
+                context_size,
+                batch,
+                direct
+            );
+        }
+    }
+
+    #[test]
+    fn test_calculate_limit_from_context_size_bounds() {
+        // Test MIN_LIMIT bound (small context)
+        let small_context = 10_000u64; // 10K tokens
+        let direct = calculate_limit_from_context_size(small_context, false);
+        assert_eq!(direct, MIN_LIMIT, "Should clamp to MIN_LIMIT for small context");
+
+        // Test MAX_LIMIT bound (very large context)
+        let large_context = 1_000_000u64; // 1M tokens
+        let batch = calculate_limit_from_context_size(large_context, true);
+        assert_eq!(batch, MAX_LIMIT, "Should clamp to MAX_LIMIT for large context");
+    }
+
+    #[test]
+    fn test_calculate_limit_from_context_size_expected_values() {
+        // Claude Opus 4.5 (200K context):
+        // direct: 200,000 * 0.01 * 4 = 8,000 bytes
+        // batch:  200,000 * 0.02 * 4 = 16,000 bytes
+        let context_200k = 200_000u64;
+        assert_eq!(calculate_limit_from_context_size(context_200k, false), 8_000);
+        assert_eq!(calculate_limit_from_context_size(context_200k, true), 16_000);
+
+        // GPT-4 class (128K context):
+        // direct: 128,000 * 0.01 * 4 = 5,120 bytes
+        // batch:  128,000 * 0.02 * 4 = 10,240 bytes
+        let context_128k = 128_000u64;
+        assert_eq!(calculate_limit_from_context_size(context_128k, false), 5_120);
+        assert_eq!(calculate_limit_from_context_size(context_128k, true), 10_240);
     }
 }
