@@ -159,10 +159,13 @@ pub fn generate_pkce() -> PkceCodes {
     use sha2::{Digest, Sha256};
 
     // Generate random verifier (43-128 characters)
-    let verifier: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(43)
-        .map(char::from)
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::rng();
+    let verifier: String = (0..43)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
         .collect();
 
     // Create challenge from verifier
@@ -180,10 +183,13 @@ pub fn generate_pkce() -> PkceCodes {
 /// Generate random state string
 pub fn generate_state() -> String {
     use rand::Rng;
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::rng();
+    (0..32)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
         .collect()
 }
 
