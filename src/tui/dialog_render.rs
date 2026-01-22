@@ -345,6 +345,35 @@ fn render_waiting_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme,
     frame.render_widget(help, chunks[3]);
 }
 
+/// Create styled spans for a permission option button
+fn permission_option_spans<'a>(
+    key: &'a str,
+    label: &'a str,
+    is_selected: bool,
+    color: ratatui::style::Color,
+    bg_color: ratatui::style::Color,
+) -> [Span<'a>; 2] {
+    let key_style = if is_selected {
+        Style::default()
+            .fg(bg_color)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    };
+
+    let label_style = if is_selected {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    [
+        Span::styled(key, key_style),
+        Span::styled(label, label_style),
+    ]
+}
+
 /// Render permission request dialog
 fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
     let chunks = Layout::default()
@@ -361,9 +390,7 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
         ])
         .split(area);
 
-    // Title
-    let title_text = "Permission Required";
-    let title = Paragraph::new(title_text)
+    let title = Paragraph::new("Permission Required")
         .style(
             Style::default()
                 .fg(theme.warning)
@@ -372,163 +399,84 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
         .alignment(Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
-    // Tool name
-    if let Some(req) = &dialog.permission_request {
-        let tool_label = format!("Permission: {}", req.permission);
-        let tool = Paragraph::new(tool_label)
-            .style(Style::default().fg(theme.accent))
-            .alignment(Alignment::Left);
-        frame.render_widget(tool, chunks[2]);
+    let Some(req) = &dialog.permission_request else {
+        return;
+    };
 
-        // Patterns and metadata
-        let patterns_text = req.patterns.join(", ");
-        let metadata_text =
-            serde_json::to_string_pretty(&req.metadata).unwrap_or_else(|_| "{}".to_string());
+    let tool_label = format!("Permission: {}", req.permission);
+    let tool = Paragraph::new(tool_label)
+        .style(Style::default().fg(theme.accent))
+        .alignment(Alignment::Left);
+    frame.render_widget(tool, chunks[2]);
 
-        let details_text = format!(
-            "Patterns: {}\n\nMetadata:\n{}",
-            patterns_text,
-            if metadata_text.len() > 300 {
-                format!("{}...", &metadata_text[..300])
-            } else {
-                metadata_text
-            }
-        );
+    let patterns_text = req.patterns.join(", ");
+    let metadata_text =
+        serde_json::to_string_pretty(&req.metadata).unwrap_or_else(|_| "{}".to_string());
 
-        let details = Paragraph::new(details_text)
-            .style(Style::default().fg(theme.foreground))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(details, chunks[4]);
+    let truncated_metadata = if metadata_text.len() > 300 {
+        format!("{}...", &metadata_text[..300])
+    } else {
+        metadata_text
+    };
 
-        // Options with selection highlighting
-        // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
-        let selected = dialog.selected_permission_option;
+    let details_text = format!(
+        "Patterns: {}\n\nMetadata:\n{}",
+        patterns_text, truncated_metadata
+    );
+    let details = Paragraph::new(details_text)
+        .style(Style::default().fg(theme.foreground))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(details, chunks[4]);
 
-        let mut option_spans = vec![];
+    let selected = dialog.selected_permission_option;
 
-        // Once option
-        option_spans.push(Span::styled(
-            "[Y]",
-            if selected == 0 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.success)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Once    ",
-            if selected == 0 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
+    let mut option_spans: Vec<Span> = Vec::new();
+    let [k, l] = permission_option_spans(
+        "[Y]",
+        " Once    ",
+        selected == 0,
+        theme.success,
+        theme.background,
+    );
+    option_spans.extend([k, l]);
+    let [k, l] = permission_option_spans(
+        "[S]",
+        " Session    ",
+        selected == 1,
+        theme.accent,
+        theme.background,
+    );
+    option_spans.extend([k, l]);
+    let [k, l] = permission_option_spans(
+        "[W]",
+        " Workspace    ",
+        selected == 2,
+        theme.accent,
+        theme.background,
+    );
+    option_spans.extend([k, l]);
+    let [k, l] = permission_option_spans(
+        "[G]",
+        " Global    ",
+        selected == 3,
+        theme.accent,
+        theme.background,
+    );
+    option_spans.extend([k, l]);
+    let [k, l] = permission_option_spans(
+        "[N]",
+        " Reject",
+        selected == 4,
+        theme.error,
+        theme.background,
+    );
+    option_spans.extend([k, l]);
 
-        // Session option
-        option_spans.push(Span::styled(
-            "[S]",
-            if selected == 1 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Session    ",
-            if selected == 1 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
+    let options_widget = Paragraph::new(Line::from(option_spans))
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(theme.foreground));
+    frame.render_widget(options_widget, chunks[6]);
 
-        // Workspace option
-        option_spans.push(Span::styled(
-            "[W]",
-            if selected == 2 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Workspace    ",
-            if selected == 2 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Global option
-        option_spans.push(Span::styled(
-            "[G]",
-            if selected == 3 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Global    ",
-            if selected == 3 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Reject option
-        option_spans.push(Span::styled(
-            "[N]",
-            if selected == 4 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.error)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.error)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Reject",
-            if selected == 4 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        let options = vec![Line::from(option_spans)];
-        let options_widget = Paragraph::new(options)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(theme.foreground));
-        frame.render_widget(options_widget, chunks[6]);
-    }
-
-    // Help text
     let help = Paragraph::new(
         "Left/Right: Navigate | Enter: Confirm | Y/S/W/G/N: Direct select | Esc: Cancel",
     )

@@ -12,7 +12,6 @@ use crate::session::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 const DESCRIPTION: &str = r#"Executes multiple independent tool calls concurrently to reduce latency.
 
@@ -389,6 +388,21 @@ async fn execute_single_call(
     }
 }
 
+/// Create a base ToolPart with common fields
+fn create_tool_part(part_id: &str, ctx: &ToolContext, tool_name: &str, state: ToolState) -> Part {
+    Part::Tool(ToolPart {
+        base: PartBase {
+            id: part_id.to_string(),
+            session_id: ctx.session_id.clone(),
+            message_id: ctx.message_id.clone(),
+        },
+        tool: tool_name.to_string(),
+        call_id: part_id.to_string(),
+        state,
+        metadata: None,
+    })
+}
+
 /// Save tool part in "running" state
 async fn save_tool_part_running(
     part_id: &str,
@@ -397,24 +411,15 @@ async fn save_tool_part_running(
     input: Value,
     start_time: i64,
 ) -> anyhow::Result<()> {
-    let part = Part::Tool(ToolPart {
-        base: PartBase {
-            id: part_id.to_string(),
-            session_id: ctx.session_id.clone(),
-            message_id: ctx.message_id.clone(),
-        },
-        tool: tool_name.to_string(),
-        call_id: part_id.to_string(),
-        state: ToolState::Running(ToolStateRunning {
-            input,
-            title: None,
-            metadata: None,
-            time: ToolTimeStart { start: start_time },
-        }),
+    let state = ToolState::Running(ToolStateRunning {
+        input,
+        title: None,
         metadata: None,
+        time: ToolTimeStart { start: start_time },
     });
-
-    part.save().await
+    create_tool_part(part_id, ctx, tool_name, state)
+        .save()
+        .await
 }
 
 /// Save tool part in "completed" state
@@ -427,31 +432,21 @@ async fn save_tool_part_completed(
     start_time: i64,
 ) -> anyhow::Result<()> {
     let end_time = chrono::Utc::now().timestamp_millis();
-
-    let part = Part::Tool(ToolPart {
-        base: PartBase {
-            id: part_id.to_string(),
-            session_id: ctx.session_id.clone(),
-            message_id: ctx.message_id.clone(),
+    let state = ToolState::Completed(ToolStateCompleted {
+        input,
+        output: result.output.clone(),
+        title: result.title.clone(),
+        metadata: result.metadata.clone(),
+        time: ToolTimeComplete {
+            start: start_time,
+            end: end_time,
+            compacted: None,
         },
-        tool: tool_name.to_string(),
-        call_id: part_id.to_string(),
-        state: ToolState::Completed(ToolStateCompleted {
-            input,
-            output: result.output.clone(),
-            title: result.title.clone(),
-            metadata: result.metadata.clone(),
-            time: ToolTimeComplete {
-                start: start_time,
-                end: end_time,
-                compacted: None,
-            },
-            attachments: None, // TODO: Convert result.attachments to FilePart
-        }),
-        metadata: None,
+        attachments: None,
     });
-
-    part.save().await
+    create_tool_part(part_id, ctx, tool_name, state)
+        .save()
+        .await
 }
 
 /// Save tool part in "error" state
@@ -464,29 +459,19 @@ async fn save_tool_part_error(
     start_time: i64,
 ) -> anyhow::Result<()> {
     let end_time = chrono::Utc::now().timestamp_millis();
-
-    let part = Part::Tool(ToolPart {
-        base: PartBase {
-            id: part_id.to_string(),
-            session_id: ctx.session_id.clone(),
-            message_id: ctx.message_id.clone(),
-        },
-        tool: tool_name.to_string(),
-        call_id: part_id.to_string(),
-        state: ToolState::Error(ToolStateError {
-            input,
-            error: error.to_string(),
-            metadata: None,
-            time: ToolTimeComplete {
-                start: start_time,
-                end: end_time,
-                compacted: None,
-            },
-        }),
+    let state = ToolState::Error(ToolStateError {
+        input,
+        error: error.to_string(),
         metadata: None,
+        time: ToolTimeComplete {
+            start: start_time,
+            end: end_time,
+            compacted: None,
+        },
     });
-
-    part.save().await
+    create_tool_part(part_id, ctx, tool_name, state)
+        .save()
+        .await
 }
 
 /// Calculate optimal batch size based on model context size

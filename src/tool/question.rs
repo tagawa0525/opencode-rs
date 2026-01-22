@@ -20,29 +20,8 @@ Usage notes:
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionOption {
-    pub label: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionInfo {
-    pub question: String,
-    pub header: String,
-    pub options: Vec<QuestionOption>,
-    #[serde(default)]
-    pub multiple: bool,
-    #[serde(default = "default_custom")]
-    pub custom: bool,
-}
-
-fn default_custom() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionParams {
-    pub questions: Vec<QuestionInfo>,
+struct QuestionParams {
+    questions: Vec<super::QuestionInfo>,
 }
 
 pub struct QuestionTool;
@@ -117,28 +96,7 @@ impl Tool for QuestionTool {
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let params: QuestionParams = serde_json::from_value(args)?;
 
-        // Convert QuestionParams to the tool::QuestionInfo format
-        let questions: Vec<crate::tool::QuestionInfo> = params
-            .questions
-            .iter()
-            .map(|q| crate::tool::QuestionInfo {
-                question: q.question.clone(),
-                header: q.header.clone(),
-                options: q
-                    .options
-                    .iter()
-                    .map(|o| crate::tool::QuestionOption {
-                        label: o.label.clone(),
-                        description: o.description.clone(),
-                    })
-                    .collect(),
-                multiple: q.multiple,
-                custom: q.custom,
-            })
-            .collect();
-
-        // Ask the questions through the handler
-        let answers = ctx.ask_question(questions).await?;
+        let answers = ctx.ask_question(params.questions.clone()).await?;
 
         // Format the response
         let formatted = params
