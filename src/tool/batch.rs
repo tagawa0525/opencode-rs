@@ -21,14 +21,20 @@ Payload Format (JSON array via tool_calls parameter):
 [{"tool": "read", "parameters": {"file_path": "src/main.rs"}}, {"tool": "grep", "parameters": {"pattern": "fn main", "glob": "**/*.rs"}}]
 
 Notes:
-- Supports 1–100+ tool calls (automatically splits into batches of 10)
+- Supports unlimited tool calls (automatically calculates optimal batch size based on model context)
+- Batch size is dynamically determined: targets 85% of model's context window
 - Within each batch, all calls run in parallel; ordering NOT guaranteed
 - Multiple batches are executed sequentially
 - Partial failures do not stop other tool calls
 - Do NOT use the batch tool within another batch tool
 
+Batch Size Examples:
+- Claude Sonnet 4: ~85 tool calls per batch (200K context)
+- GPT-4: ~21 tool calls per batch (128K context)
+- Smaller models: 5-10 tool calls per batch
+
 Good Use Cases:
-- Read many files (even 50+ files!)
+- Read many files (even 100+ files!)
 - grep + glob + read combos
 - Multiple bash commands
 - Multi-part edits on the same or different files
@@ -41,8 +47,20 @@ When NOT to Use:
 Batching tool calls provides 2–5x efficiency gain and much better UX.
 "#;
 
-/// Maximum number of tool calls allowed in a single batch
-const MAX_BATCH_SIZE: usize = 10;
+/// Default batch size when model context size is unknown
+const DEFAULT_BATCH_SIZE: usize = 10;
+
+/// Minimum batch size for safety
+const MIN_BATCH_SIZE: usize = 5;
+
+/// Maximum batch size to avoid API rate limits
+const MAX_BATCH_SIZE: usize = 50;
+
+/// Target context usage (85% to leave room for multibyte characters)
+const TARGET_CONTEXT_USAGE: f64 = 0.85;
+
+/// Estimated average tokens per tool result (conservative estimate)
+const AVG_TOKENS_PER_TOOL_RESULT: u64 = 2000;
 
 /// Tools that are not allowed to be batched
 const DISALLOWED_TOOLS: &[&str] = &["batch"];
@@ -121,9 +139,19 @@ impl Tool for BatchTool {
         let registry = registry::registry();
         let available_tools = registry.list_tools();
 
-        // Split tool calls into batches of MAX_BATCH_SIZE
+        // Calculate optimal batch size based on model context
+        let batch_size = calculate_batch_size(ctx).await;
+
+        tracing::debug!(
+            "Calculated batch size: {} (total calls: {}, model: {:?})",
+            batch_size,
+            total_calls,
+            ctx.model_id
+        );
+
+        // Split tool calls into batches
         let mut all_results = Vec::new();
-        let batches: Vec<_> = params.tool_calls.chunks(MAX_BATCH_SIZE).collect();
+        let batches: Vec<_> = params.tool_calls.chunks(batch_size).collect();
 
         let batch_count = batches.len();
 
@@ -132,7 +160,10 @@ impl Tool for BatchTool {
             let mut futures = Vec::new();
 
             for call in batch {
-                let ctx = ctx.clone();
+                let mut ctx = ctx.clone();
+                // Set is_in_batch flag for child tools (e.g., webfetch can use this to increase output limit)
+                ctx.extra
+                    .insert("is_in_batch".to_string(), serde_json::json!(true));
                 let available_tools = available_tools.clone();
                 let call = call.clone();
 
@@ -198,8 +229,14 @@ impl Tool for BatchTool {
             }
         }
 
+        // Build summarized details to avoid payload size issues
+        let summarized_details: Vec<_> = all_results
+            .iter()
+            .map(|r| build_summarized_result(r))
+            .collect();
+
         // Build metadata
-        let mut metadata = std::collections::HashMap::new();
+        let mut metadata = HashMap::new();
         metadata.insert("total_calls".to_string(), json!(total_calls));
         metadata.insert("successful".to_string(), json!(successful));
         metadata.insert("failed".to_string(), json!(failed));
@@ -209,7 +246,7 @@ impl Tool for BatchTool {
             "tools".to_string(),
             json!(all_results.iter().map(|r| &r.tool).collect::<Vec<_>>()),
         );
-        metadata.insert("details".to_string(), json!(all_results));
+        metadata.insert("details".to_string(), json!(summarized_details));
 
         let title = if batch_count > 1 {
             format!(
@@ -223,13 +260,25 @@ impl Tool for BatchTool {
             )
         };
 
-        Ok(ToolResult {
+        let result = ToolResult {
             title,
             output: output_message,
             metadata,
             truncated: false,
             attachments,
-        })
+        };
+
+        // Log the size of the result for debugging
+        if let Ok(json_str) = serde_json::to_string(&result) {
+            let size_bytes = json_str.len();
+            tracing::info!(
+                "Batch tool result size: {} bytes ({} KB)",
+                size_bytes,
+                size_bytes / 1024
+            );
+        }
+
+        Ok(result)
     }
 }
 
@@ -299,16 +348,9 @@ async fn execute_single_call(
         };
     }
 
-    // Save "running" state
-    let _ = save_tool_part(
-        &part_id,
-        ctx,
-        &call.tool,
-        call.parameters.clone(),
-        call_start_time,
-        ToolExecutionState::Running,
-    )
-    .await;
+    // Note: We intentionally do NOT save individual tool results to avoid
+    // adding them to the conversation context. Only the batch tool's summary
+    // result should be added to the conversation to prevent payload overflow.
 
     // Execute the tool
     let registry = registry::registry();
@@ -316,36 +358,14 @@ async fn execute_single_call(
         .execute(&call.tool, call.parameters.clone(), ctx)
         .await
     {
-        Ok(result) => {
-            let _ = save_tool_part(
-                &part_id,
-                ctx,
-                &call.tool,
-                call.parameters,
-                call_start_time,
-                ToolExecutionState::Completed(&result),
-            )
-            .await;
-
-            BatchResult {
-                success: true,
-                tool: call.tool,
-                result: Some(result),
-                error: None,
-            }
-        }
+        Ok(result) => BatchResult {
+            success: true,
+            tool: call.tool,
+            result: Some(result),
+            error: None,
+        },
         Err(e) => {
             let error_msg = e.to_string();
-
-            let _ = save_tool_part(
-                &part_id,
-                ctx,
-                &call.tool,
-                call.parameters,
-                call_start_time,
-                ToolExecutionState::Error(&error_msg),
-            )
-            .await;
 
             BatchResult {
                 success: false,
@@ -423,4 +443,63 @@ async fn save_tool_part(
     });
 
     part.save().await
+}
+
+/// Calculate optimal batch size based on model context size
+async fn calculate_batch_size(ctx: &ToolContext) -> usize {
+    // If no model ID is provided, use default
+    let Some(model_id) = &ctx.model_id else {
+        tracing::debug!("No model ID provided, using default batch size");
+        return DEFAULT_BATCH_SIZE;
+    };
+
+    // Get model context size from models.dev
+    match get_model_context_size(model_id).await {
+        Ok(context_size) => {
+            // Calculate usable context (85% of total)
+            let usable_context = (context_size as f64 * TARGET_CONTEXT_USAGE) as u64;
+
+            // Calculate how many tool results can fit
+            let batch_size = (usable_context / AVG_TOKENS_PER_TOOL_RESULT) as usize;
+
+            // Clamp to min/max bounds
+            let clamped = batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+
+            tracing::debug!(
+                "Model {} context: {}, usable: {}, calculated batch size: {} (clamped: {})",
+                model_id,
+                context_size,
+                usable_context,
+                batch_size,
+                clamped
+            );
+
+            clamped
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to get context size for model {}: {}. Using default batch size.",
+                model_id,
+                e
+            );
+            DEFAULT_BATCH_SIZE
+        }
+    }
+}
+
+/// Build a summarized result for metadata
+fn build_summarized_result(r: &BatchResult) -> Value {
+    if r.success {
+        json!({
+            "success": true,
+            "tool": r.tool,
+            "title": r.result.as_ref().map(|res| &res.title),
+        })
+    } else {
+        json!({
+            "success": false,
+            "tool": r.tool,
+            "error": r.error,
+        })
+    }
 }

@@ -51,6 +51,48 @@ impl SseParser for OpenAIParser {
     }
 }
 
+/// Maximum request size limit (5MB)
+const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024;
+
+/// Count tool_use parts in the last message of a request body
+fn count_tool_calls_in_request(request_body: &serde_json::Value) -> usize {
+    request_body
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|msgs| msgs.last())
+        .and_then(|msg| msg.get("content"))
+        .and_then(|content| content.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Build error message for oversized request payload
+fn build_payload_too_large_error(request_size: usize, tool_call_count: usize) -> String {
+    if tool_call_count > 10 {
+        format!(
+            "Request payload too large: {} bytes (max: {} bytes). \
+            You are trying to make {} tool calls at once. \
+            \n\nIMPORTANT: Use the 'batch' tool instead! \
+            \n\nExample: \
+            \n{{\n  \"tool\": \"batch\",\n  \"parameters\": {{\n    \"tool_calls\": [\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}},\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}}\n    ]\n  }}\n}} \
+            \n\nThe batch tool automatically handles large numbers of tool calls efficiently.",
+            request_size, MAX_REQUEST_SIZE, tool_call_count
+        )
+    } else {
+        format!(
+            "Request payload too large: {} bytes (max: {} bytes). \
+            This usually happens when trying to make too many tool calls at once. \
+            Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
+            request_size, MAX_REQUEST_SIZE
+        )
+    }
+}
+
 /// Streaming client for LLM APIs
 pub struct StreamingClient {
     client: Client,
@@ -125,18 +167,13 @@ impl StreamingClient {
             "stream": true,
         });
 
-        // Check request body size (5MB limit for Anthropic API)
+        // Check request body size
         let request_body_str = serde_json::to_string(&request_body)?;
         let request_size = request_body_str.len();
-        const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
         if request_size > MAX_REQUEST_SIZE {
-            let error_msg = format!(
-                "Request payload too large: {} bytes (max: {} bytes). \
-                This usually happens when trying to make too many tool calls at once. \
-                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
-                request_size, MAX_REQUEST_SIZE
-            );
+            let tool_call_count = count_tool_calls_in_request(&request_body);
+            let error_msg = build_payload_too_large_error(request_size, tool_call_count);
             let tx_clone = tx.clone();
             tokio::spawn(async move {
                 let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
@@ -273,7 +310,7 @@ impl StreamingClient {
             request_body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
-        // Check request body size (5MB limit)
+        // Check request body size
         let request_body_str = match serde_json::to_string(&request_body) {
             Ok(s) => s,
             Err(e) => {
@@ -290,15 +327,10 @@ impl StreamingClient {
             }
         };
         let request_size = request_body_str.len();
-        const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
         if request_size > MAX_REQUEST_SIZE {
-            let error_msg = format!(
-                "Request payload too large: {} bytes (max: {} bytes). \
-                This usually happens when trying to make too many tool calls at once. \
-                Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
-                request_size, MAX_REQUEST_SIZE
-            );
+            let tool_call_count = count_tool_calls_in_request(&request_body);
+            let error_msg = build_payload_too_large_error(request_size, tool_call_count);
             let tx_clone = tx.clone();
             tokio::spawn(async move {
                 let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;

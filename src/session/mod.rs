@@ -345,10 +345,10 @@ fn generate_slug() -> String {
         "fox", "dog", "cat", "bird", "fish", "bear", "wolf", "deer", "hawk", "owl",
     ];
 
-    let mut rng = rand::thread_rng();
-    let adj = adjectives[rng.gen_range(0..adjectives.len())];
-    let noun = nouns[rng.gen_range(0..nouns.len())];
-    let num: u16 = rng.gen_range(100..1000);
+    let mut rng = rand::rng();
+    let adj = adjectives[rng.random_range(0..adjectives.len())];
+    let noun = nouns[rng.random_range(0..nouns.len())];
+    let num: u16 = rng.random_range(100..1000);
 
     format!("{}-{}-{}", adj, noun, num)
 }

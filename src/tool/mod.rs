@@ -11,6 +11,7 @@ mod executor;
 mod glob;
 mod grep;
 mod invalid;
+mod model_utils;
 mod question;
 mod read;
 mod registry;
@@ -25,6 +26,7 @@ pub use executor::*;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use invalid::InvalidTool;
+pub use model_utils::*;
 pub use question::QuestionTool;
 pub use read::ReadTool;
 pub use registry::*;
@@ -133,6 +135,8 @@ pub struct ToolContext {
     pub message_id: String,
     /// Agent name
     pub agent: String,
+    /// Model ID (e.g., "claude-sonnet-4-5")
+    pub model_id: Option<String>,
     /// Abort signal
     pub abort: Option<tokio::sync::watch::Receiver<bool>>,
     /// Working directory
@@ -153,6 +157,7 @@ impl ToolContext {
             session_id: session_id.to_string(),
             message_id: message_id.to_string(),
             agent: agent.to_string(),
+            model_id: None,
             abort: None,
             cwd: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
@@ -164,6 +169,11 @@ impl ToolContext {
             permission_handler: None,
             question_handler: None,
         }
+    }
+
+    pub fn with_model_id(mut self, model_id: String) -> Self {
+        self.model_id = Some(model_id);
+        self
     }
 
     pub fn with_abort(mut self, abort: tokio::sync::watch::Receiver<bool>) -> Self {

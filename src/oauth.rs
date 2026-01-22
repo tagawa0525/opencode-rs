@@ -152,18 +152,28 @@ pub struct OpenAITokenResponse {
     pub token_type: String,
 }
 
+/// Alphanumeric charset for random string generation
+const ALPHANUMERIC_CHARSET: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/// Generate a random alphanumeric string of the given length
+fn generate_random_alphanumeric(len: usize) -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    (0..len)
+        .map(|_| {
+            let idx = rng.random_range(0..ALPHANUMERIC_CHARSET.len());
+            ALPHANUMERIC_CHARSET[idx] as char
+        })
+        .collect()
+}
+
 /// Generate PKCE codes
 pub fn generate_pkce() -> PkceCodes {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use rand::Rng;
     use sha2::{Digest, Sha256};
 
-    // Generate random verifier (43-128 characters)
-    let verifier: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(43)
-        .map(char::from)
-        .collect();
+    let verifier = generate_random_alphanumeric(43);
 
     // Create challenge from verifier
     let mut hasher = Sha256::new();
@@ -179,12 +189,7 @@ pub fn generate_pkce() -> PkceCodes {
 
 /// Generate random state string
 pub fn generate_state() -> String {
-    use rand::Rng;
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect()
+    generate_random_alphanumeric(32)
 }
 
 /// Build OpenAI authorization URL

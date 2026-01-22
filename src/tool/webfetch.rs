@@ -15,11 +15,13 @@ const DESCRIPTION: &str = r#"- Fetches content from a specified URL
 
 Usage notes:
   - IMPORTANT: if another tool is present that offers better web fetching capabilities, is more targeted to the task, or has fewer restrictions, prefer using that tool instead of this one.
+  - IMPORTANT: If you need to fetch many URLs (5+), use the 'batch' tool to avoid context overflow.
+  - Results are automatically truncated based on model context size (typically 2-16KB)
+  - Larger context models receive more detailed content
   - The URL must be a fully-formed valid URL
   - HTTP URLs will be automatically upgraded to HTTPS
   - Format options: "markdown" (default), "text", or "html"
   - This tool is read-only and does not modify any files
-  - Results may be summarized if the content is very large
 "#;
 
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024; // 5MB
@@ -200,7 +202,7 @@ impl Tool for WebFetchTool {
         let title = format!("{} ({})", params.url, content_type);
 
         // Handle content based on requested format and actual content type
-        let output = match params.format.as_str() {
+        let mut output = match params.format.as_str() {
             "markdown" => {
                 if content_type.contains("text/html") {
                     convert_html_to_markdown(&content)
@@ -217,6 +219,28 @@ impl Tool for WebFetchTool {
             }
             _ => content,
         };
+
+        // Truncate output to prevent payload overflow
+        // Dynamically calculate limit based on model context size
+        // Check if we're running in a batch to apply appropriate limits
+        let is_in_batch = ctx
+            .extra
+            .get("is_in_batch")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Calculate output limit based on model context size
+        let max_output_size = calculate_webfetch_output_limit(ctx, is_in_batch).await;
+
+        if output.len() > max_output_size {
+            // Use smart truncation to respect line boundaries and UTF-8 encoding
+            output = smart_truncate(&output, max_output_size);
+            let truncation_msg = format!(
+                "\n\n[Output truncated: content exceeds {}KB limit. Use batch tool for multiple fetches.]",
+                max_output_size / 1024
+            );
+            output.push_str(&truncation_msg);
+        }
 
         Ok(ToolResult::success(title, output))
     }
