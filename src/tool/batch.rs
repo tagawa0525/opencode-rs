@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::id::{self, IdPrefix};
-use crate::provider;
 use crate::session::{
     Part, PartBase, ToolPart, ToolState, ToolStateCompleted, ToolStateError, ToolStateRunning,
     ToolTimeComplete, ToolTimeStart,
@@ -233,27 +232,11 @@ impl Tool for BatchTool {
         // Build summarized details to avoid payload size issues
         let summarized_details: Vec<_> = all_results
             .iter()
-            .map(|r| {
-                if r.success {
-                    // For successful calls, only include minimal info
-                    json!({
-                        "success": true,
-                        "tool": r.tool,
-                        "title": r.result.as_ref().map(|res| &res.title),
-                    })
-                } else {
-                    // For failed calls, include error details
-                    json!({
-                        "success": false,
-                        "tool": r.tool,
-                        "error": r.error,
-                    })
-                }
-            })
+            .map(|r| build_summarized_result(r))
             .collect();
 
         // Build metadata
-        let mut metadata = std::collections::HashMap::new();
+        let mut metadata = HashMap::new();
         metadata.insert("total_calls".to_string(), json!(total_calls));
         metadata.insert("successful".to_string(), json!(successful));
         metadata.insert("failed".to_string(), json!(failed));
@@ -501,5 +484,22 @@ async fn calculate_batch_size(ctx: &ToolContext) -> usize {
             );
             DEFAULT_BATCH_SIZE
         }
+    }
+}
+
+/// Build a summarized result for metadata
+fn build_summarized_result(r: &BatchResult) -> Value {
+    if r.success {
+        json!({
+            "success": true,
+            "tool": r.tool,
+            "title": r.result.as_ref().map(|res| &res.title),
+        })
+    } else {
+        json!({
+            "success": false,
+            "tool": r.tool,
+            "error": r.error,
+        })
     }
 }

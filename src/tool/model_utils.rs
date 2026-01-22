@@ -5,14 +5,32 @@
 
 use super::*;
 use crate::provider;
+use std::collections::HashMap;
+
+// ============================================================================
+// Output Limit Constants
+// ============================================================================
+
+/// Default output limit when model context is unknown (2KB)
+const DEFAULT_LIMIT: usize = 2 * 1024;
+
+/// Minimum output limit (1KB)
+const MIN_LIMIT: usize = 1024;
+
+/// Maximum output limit (16KB)
+const MAX_LIMIT: usize = 16 * 1024;
+
+/// Estimated bytes per token for output calculation
+const BYTES_PER_TOKEN: usize = 4;
+
+// ============================================================================
+// Model Context Functions
+// ============================================================================
 
 /// Get model context size from models.dev
 pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
-    // Load models from models.dev
-    let providers: std::collections::HashMap<String, provider::ModelsDevProvider> =
-        provider::get().await?;
+    let providers: HashMap<String, provider::ModelsDevProvider> = provider::get().await?;
 
-    // Search for the model across all providers
     for provider_info in providers.values() {
         if let Some(model) = provider_info.models.get(model_id) {
             return Ok(model.limit.context);
@@ -22,11 +40,9 @@ pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
     anyhow::bail!("Model {} not found in models.dev", model_id)
 }
 
-// Constants for output limit calculation
-const DEFAULT_LIMIT: usize = 2 * 1024; // 2KB
-const MIN_LIMIT: usize = 1024; // 1KB
-const MAX_LIMIT: usize = 16 * 1024; // 16KB
-const BYTES_PER_TOKEN: usize = 4;
+// ============================================================================
+// Output Limit Calculation
+// ============================================================================
 
 /// Calculate output limit from a given context size (pure function).
 ///
@@ -85,6 +101,10 @@ pub async fn calculate_webfetch_output_limit(ctx: &ToolContext, is_in_batch: boo
         }
     }
 }
+
+// ============================================================================
+// String Truncation Utilities
+// ============================================================================
 
 /// Smart truncation that respects line boundaries and UTF-8 encoding.
 ///
@@ -186,11 +206,11 @@ mod tests {
     fn test_calculate_limit_from_context_size_direct_vs_batch() {
         // Test various context sizes to ensure batch >= direct always holds
         let test_cases = [
-            32_000u64,   // Small model
-            128_000,     // GPT-4 class
-            200_000,     // Claude Opus 4.5
-            500_000,     // Large context
-            1_000_000,   // Very large context
+            32_000u64, // Small model
+            128_000,   // GPT-4 class
+            200_000,   // Claude Opus 4.5
+            500_000,   // Large context
+            1_000_000, // Very large context
         ];
 
         for context_size in test_cases {
@@ -212,12 +232,18 @@ mod tests {
         // Test MIN_LIMIT bound (small context)
         let small_context = 10_000u64; // 10K tokens
         let direct = calculate_limit_from_context_size(small_context, false);
-        assert_eq!(direct, MIN_LIMIT, "Should clamp to MIN_LIMIT for small context");
+        assert_eq!(
+            direct, MIN_LIMIT,
+            "Should clamp to MIN_LIMIT for small context"
+        );
 
         // Test MAX_LIMIT bound (very large context)
         let large_context = 1_000_000u64; // 1M tokens
         let batch = calculate_limit_from_context_size(large_context, true);
-        assert_eq!(batch, MAX_LIMIT, "Should clamp to MAX_LIMIT for large context");
+        assert_eq!(
+            batch, MAX_LIMIT,
+            "Should clamp to MAX_LIMIT for large context"
+        );
     }
 
     #[test]
@@ -226,14 +252,26 @@ mod tests {
         // direct: 200,000 * 0.01 * 4 = 8,000 bytes
         // batch:  200,000 * 0.02 * 4 = 16,000 bytes
         let context_200k = 200_000u64;
-        assert_eq!(calculate_limit_from_context_size(context_200k, false), 8_000);
-        assert_eq!(calculate_limit_from_context_size(context_200k, true), 16_000);
+        assert_eq!(
+            calculate_limit_from_context_size(context_200k, false),
+            8_000
+        );
+        assert_eq!(
+            calculate_limit_from_context_size(context_200k, true),
+            16_000
+        );
 
         // GPT-4 class (128K context):
         // direct: 128,000 * 0.01 * 4 = 5,120 bytes
         // batch:  128,000 * 0.02 * 4 = 10,240 bytes
         let context_128k = 128_000u64;
-        assert_eq!(calculate_limit_from_context_size(context_128k, false), 5_120);
-        assert_eq!(calculate_limit_from_context_size(context_128k, true), 10_240);
+        assert_eq!(
+            calculate_limit_from_context_size(context_128k, false),
+            5_120
+        );
+        assert_eq!(
+            calculate_limit_from_context_size(context_128k, true),
+            10_240
+        );
     }
 }
