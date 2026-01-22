@@ -115,29 +115,8 @@ pub struct PermissionRequest {
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// Question request from tool execution
-#[derive(Debug, Clone)]
-pub struct QuestionRequest {
-    pub id: String,
-    pub questions: Vec<QuestionInfo>,
-}
-
-/// Single question information
-#[derive(Debug, Clone)]
-pub struct QuestionInfo {
-    pub question: String,
-    pub header: String,
-    pub options: Vec<QuestionOption>,
-    pub multiple: bool,
-    pub custom: bool,
-}
-
-/// Question option
-#[derive(Debug, Clone)]
-pub struct QuestionOption {
-    pub label: String,
-    pub description: String,
-}
+// Re-export question types from tool module to avoid duplication
+pub use crate::tool::{QuestionInfo, QuestionOption, QuestionRequest};
 
 /// Dialog state for selection dialogs
 #[derive(Debug, Clone)]

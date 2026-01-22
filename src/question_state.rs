@@ -82,31 +82,9 @@ pub fn create_tui_question_handler(
             })
             .await;
 
-            // Convert tool::QuestionRequest to tui::QuestionRequest
-            let tui_request = crate::tui::QuestionRequest {
-                id: request_clone.id.clone(),
-                questions: request_clone
-                    .questions
-                    .iter()
-                    .map(|q| crate::tui::QuestionInfo {
-                        question: q.question.clone(),
-                        header: q.header.clone(),
-                        options: q
-                            .options
-                            .iter()
-                            .map(|o| crate::tui::QuestionOption {
-                                label: o.label.clone(),
-                                description: o.description.clone(),
-                            })
-                            .collect(),
-                        multiple: q.multiple,
-                        custom: q.custom,
-                    })
-                    .collect(),
-            };
-
             // Send question request event to TUI
-            let _ = event_tx.try_send(crate::tui::AppEvent::QuestionRequested(tui_request));
+            // No conversion needed - types are unified (tui re-exports tool types)
+            let _ = event_tx.try_send(crate::tui::AppEvent::QuestionRequested(request_clone));
         });
 
         response_rx

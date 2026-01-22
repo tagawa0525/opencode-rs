@@ -250,14 +250,13 @@ async fn execute_single_call(
             DISALLOWED_TOOLS.join(", ")
         );
 
-        // Save error state
-        let _ = save_tool_part_error(
+        let _ = save_tool_part(
             &part_id,
             ctx,
             &call.tool,
             call.parameters.clone(),
-            &error_msg,
             call_start_time,
+            ToolExecutionState::Error(&error_msg),
         )
         .await;
 
@@ -282,14 +281,13 @@ async fn execute_single_call(
             filtered_tools.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
         );
 
-        // Save error state
-        let _ = save_tool_part_error(
+        let _ = save_tool_part(
             &part_id,
             ctx,
             &call.tool,
             call.parameters.clone(),
-            &error_msg,
             call_start_time,
+            ToolExecutionState::Error(&error_msg),
         )
         .await;
 
@@ -302,12 +300,13 @@ async fn execute_single_call(
     }
 
     // Save "running" state
-    let _ = save_tool_part_running(
+    let _ = save_tool_part(
         &part_id,
         ctx,
         &call.tool,
         call.parameters.clone(),
         call_start_time,
+        ToolExecutionState::Running,
     )
     .await;
 
@@ -318,14 +317,13 @@ async fn execute_single_call(
         .await
     {
         Ok(result) => {
-            // Save "completed" state
-            let _ = save_tool_part_completed(
+            let _ = save_tool_part(
                 &part_id,
                 ctx,
                 &call.tool,
                 call.parameters,
-                &result,
                 call_start_time,
+                ToolExecutionState::Completed(&result),
             )
             .await;
 
@@ -339,14 +337,13 @@ async fn execute_single_call(
         Err(e) => {
             let error_msg = e.to_string();
 
-            // Save "error" state
-            let _ = save_tool_part_error(
+            let _ = save_tool_part(
                 &part_id,
                 ctx,
                 &call.tool,
                 call.parameters,
-                &error_msg,
                 call_start_time,
+                ToolExecutionState::Error(&error_msg),
             )
             .await;
 
@@ -360,81 +357,58 @@ async fn execute_single_call(
     }
 }
 
-/// Save tool part in "running" state
-async fn save_tool_part_running(
+/// Tool execution state for saving to storage
+enum ToolExecutionState<'a> {
+    Running,
+    Completed(&'a ToolResult),
+    Error(&'a str),
+}
+
+/// Save tool part with the specified state
+async fn save_tool_part(
     part_id: &str,
     ctx: &ToolContext,
     tool_name: &str,
     input: Value,
     start_time: i64,
+    execution_state: ToolExecutionState<'_>,
 ) -> anyhow::Result<()> {
-    let part = Part::Tool(ToolPart {
-        base: PartBase {
-            id: part_id.to_string(),
-            session_id: ctx.session_id.clone(),
-            message_id: ctx.message_id.clone(),
-        },
-        tool: tool_name.to_string(),
-        call_id: part_id.to_string(),
-        state: ToolState::Running(ToolStateRunning {
+    let state = match execution_state {
+        ToolExecutionState::Running => ToolState::Running(ToolStateRunning {
             input,
             title: None,
             metadata: None,
             time: ToolTimeStart { start: start_time },
         }),
-        metadata: None,
-    });
-
-    part.save().await
-}
-
-/// Save tool part in "completed" state
-async fn save_tool_part_completed(
-    part_id: &str,
-    ctx: &ToolContext,
-    tool_name: &str,
-    input: Value,
-    result: &ToolResult,
-    start_time: i64,
-) -> anyhow::Result<()> {
-    let end_time = chrono::Utc::now().timestamp_millis();
-
-    let part = Part::Tool(ToolPart {
-        base: PartBase {
-            id: part_id.to_string(),
-            session_id: ctx.session_id.clone(),
-            message_id: ctx.message_id.clone(),
-        },
-        tool: tool_name.to_string(),
-        call_id: part_id.to_string(),
-        state: ToolState::Completed(ToolStateCompleted {
-            input,
-            output: result.output.clone(),
-            title: result.title.clone(),
-            metadata: result.metadata.clone(),
-            time: ToolTimeComplete {
-                start: start_time,
-                end: end_time,
-                compacted: None,
-            },
-            attachments: None, // TODO: Convert result.attachments to FilePart
-        }),
-        metadata: None,
-    });
-
-    part.save().await
-}
-
-/// Save tool part in "error" state
-async fn save_tool_part_error(
-    part_id: &str,
-    ctx: &ToolContext,
-    tool_name: &str,
-    input: Value,
-    error: &str,
-    start_time: i64,
-) -> anyhow::Result<()> {
-    let end_time = chrono::Utc::now().timestamp_millis();
+        ToolExecutionState::Completed(result) => {
+            let end_time = chrono::Utc::now().timestamp_millis();
+            ToolState::Completed(ToolStateCompleted {
+                input,
+                output: result.output.clone(),
+                title: result.title.clone(),
+                metadata: result.metadata.clone(),
+                time: ToolTimeComplete {
+                    start: start_time,
+                    end: end_time,
+                    compacted: None,
+                },
+                attachments: None, // TODO: Convert result.attachments to FilePart
+            })
+        }
+        ToolExecutionState::Error(error) => {
+            let end_time = chrono::Utc::now().timestamp_millis();
+            ToolState::Error(ToolStateError {
+                input,
+                error: error.to_string(),
+                metadata: None,
+                time: ToolTimeComplete {
+                    start: start_time,
+                    end: end_time,
+                    compacted: None,
+                },
+            })
+        }
+    };
 
     let part = Part::Tool(ToolPart {
         base: PartBase {
@@ -444,16 +418,7 @@ async fn save_tool_part_error(
         },
         tool: tool_name.to_string(),
         call_id: part_id.to_string(),
-        state: ToolState::Error(ToolStateError {
-            input,
-            error: error.to_string(),
-            metadata: None,
-            time: ToolTimeComplete {
-                start: start_time,
-                end: end_time,
-                compacted: None,
-            },
-        }),
+        state,
         metadata: None,
     });
 

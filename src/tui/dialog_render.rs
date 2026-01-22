@@ -404,122 +404,38 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
         // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
         let selected = dialog.selected_permission_option;
 
-        let mut option_spans = vec![];
+        // Permission option configuration: (index, key, label, color)
+        let options = [
+            (0, "[Y]", " Once    ", theme.success),
+            (1, "[S]", " Session    ", theme.accent),
+            (2, "[W]", " Workspace    ", theme.accent),
+            (3, "[G]", " Global    ", theme.accent),
+            (4, "[N]", " Reject", theme.error),
+        ];
 
-        // Once option
-        option_spans.push(Span::styled(
-            "[Y]",
-            if selected == 0 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.success)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Once    ",
-            if selected == 0 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Session option
-        option_spans.push(Span::styled(
-            "[S]",
-            if selected == 1 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Session    ",
-            if selected == 1 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Workspace option
-        option_spans.push(Span::styled(
-            "[W]",
-            if selected == 2 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Workspace    ",
-            if selected == 2 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Global option
-        option_spans.push(Span::styled(
-            "[G]",
-            if selected == 3 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Global    ",
-            if selected == 3 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
-
-        // Reject option
-        option_spans.push(Span::styled(
-            "[N]",
-            if selected == 4 {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.error)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme.error)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ));
-        option_spans.push(Span::styled(
-            " Reject",
-            if selected == 4 {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ));
+        let option_spans: Vec<Span> = options
+            .iter()
+            .flat_map(|(idx, key, label, color)| {
+                let is_selected = selected == *idx;
+                let key_style = if is_selected {
+                    Style::default()
+                        .fg(theme.background)
+                        .bg(*color)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(*color).add_modifier(Modifier::BOLD)
+                };
+                let label_style = if is_selected {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                [
+                    Span::styled(*key, key_style),
+                    Span::styled(*label, label_style),
+                ]
+            })
+            .collect();
 
         let options = vec![Line::from(option_spans)];
         let options_widget = Paragraph::new(options)
