@@ -36,13 +36,10 @@ pub async fn get_model_context_size(model_id: &str) -> Result<u64> {
 /// - Claude Opus 4.5 (200K): direct 8KB, batch 16KB
 /// - GPT-4 (128K): direct 5KB, batch 10KB
 /// - Small models (32K): direct 1KB, batch 2.6KB
-pub async fn calculate_webfetch_output_limit(
-    ctx: &ToolContext,
-    is_in_batch: bool,
-) -> usize {
+pub async fn calculate_webfetch_output_limit(ctx: &ToolContext, is_in_batch: bool) -> usize {
     // Default fallback
     const DEFAULT_LIMIT: usize = 2 * 1024; // 2KB
-    const MIN_LIMIT: usize = 1 * 1024; // 1KB
+    const MIN_LIMIT: usize = 1024; // 1KB
     const MAX_LIMIT: usize = 16 * 1024; // 16KB
     const BYTES_PER_TOKEN: usize = 4;
 
@@ -61,7 +58,7 @@ pub async fn calculate_webfetch_output_limit(
             let limit_bytes = limit_tokens * BYTES_PER_TOKEN;
 
             // Clamp to min/max bounds
-            let clamped = limit_bytes.max(MIN_LIMIT).min(MAX_LIMIT);
+            let clamped = limit_bytes.clamp(MIN_LIMIT, MAX_LIMIT);
 
             tracing::debug!(
                 "Model {} context: {}, webfetch limit: {} bytes ({}KB), is_in_batch: {}",
@@ -170,7 +167,7 @@ mod tests {
         let content = "Hello 世界";
         // Truncate in the middle of a multibyte character
         let result = smart_truncate(content, 8); // Would be in middle of "世"
-        // Should find valid UTF-8 boundary (before "世")
+                                                 // Should find valid UTF-8 boundary (before "世")
         assert_eq!(result, "Hello ");
     }
 

@@ -223,7 +223,8 @@ impl Tool for WebFetchTool {
         // Truncate output to prevent payload overflow
         // Dynamically calculate limit based on model context size
         // Check if we're running in a batch to apply appropriate limits
-        let is_in_batch = ctx.extra
+        let is_in_batch = ctx
+            .extra
             .get("is_in_batch")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);

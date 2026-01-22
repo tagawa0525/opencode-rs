@@ -163,10 +163,8 @@ impl Tool for BatchTool {
             for call in batch {
                 let mut ctx = ctx.clone();
                 // Set is_in_batch flag for child tools (e.g., webfetch can use this to increase output limit)
-                ctx.extra.insert(
-                    "is_in_batch".to_string(),
-                    serde_json::json!(true)
-                );
+                ctx.extra
+                    .insert("is_in_batch".to_string(), serde_json::json!(true));
                 let available_tools = available_tools.clone();
                 let call = call.clone();
 
@@ -482,7 +480,7 @@ async fn calculate_batch_size(ctx: &ToolContext) -> usize {
             let batch_size = (usable_context / AVG_TOKENS_PER_TOOL_RESULT) as usize;
 
             // Clamp to min/max bounds
-            let clamped = batch_size.max(MIN_BATCH_SIZE).min(MAX_BATCH_SIZE);
+            let clamped = batch_size.clamp(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
 
             tracing::debug!(
                 "Model {} context: {}, usable: {}, calculated batch size: {} (clamped: {})",
@@ -505,4 +503,3 @@ async fn calculate_batch_size(ctx: &ToolContext) -> usize {
         }
     }
 }
-
