@@ -4,13 +4,30 @@
 //! from different LLM providers (Anthropic, OpenAI).
 
 use super::stream_types::StreamEvent;
+use serde_json::Value;
 use std::collections::HashMap;
 
+/// Helper to extract u64 from JSON value
+fn get_u64(v: &Value, key: &str) -> u64 {
+    v.get(key).and_then(|x| x.as_u64()).unwrap_or(0)
+}
+
+/// Helper to extract string from JSON value
+fn get_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(|x| x.as_str())
+}
+
+/// Parse usage tokens into StreamEvent
+fn parse_usage(input_key: &str, output_key: &str, usage: &Value) -> StreamEvent {
+    StreamEvent::Usage {
+        input_tokens: get_u64(usage, input_key),
+        output_tokens: get_u64(usage, output_key),
+    }
+}
+
 /// Stateful parser for Anthropic SSE streams.
-/// Maintains index-to-ID mapping for tool calls.
 #[derive(Debug, Default)]
 pub struct AnthropicParser {
-    /// Maps content block index to tool call ID
     index_to_id: HashMap<usize, String>,
 }
 
@@ -19,14 +36,13 @@ impl AnthropicParser {
         Self::default()
     }
 
-    /// Parse a single Anthropic SSE event with state tracking
     pub fn parse(&mut self, event: &str) -> Option<StreamEvent> {
         let (event_type, data) = parse_sse_event(event)?;
 
         match event_type.as_str() {
-            "content_block_delta" => self.parse_content_block_delta(&data),
-            "content_block_start" => self.parse_content_block_start(&data),
-            "content_block_stop" => self.parse_content_block_stop(&data),
+            "content_block_delta" => self.parse_content_delta(&data),
+            "content_block_start" => self.parse_block_start(&data),
+            "content_block_stop" => self.parse_block_stop(&data),
             "message_delta" => Self::parse_message_delta(&data),
             "message_stop" => Some(StreamEvent::Done {
                 finish_reason: "stop".to_string(),
@@ -36,92 +52,72 @@ impl AnthropicParser {
         }
     }
 
-    /// Parse content_block_delta event
-    fn parse_content_block_delta(&self, data: &str) -> Option<StreamEvent> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+    fn parse_content_delta(&self, data: &str) -> Option<StreamEvent> {
+        let parsed: Value = serde_json::from_str(data).ok()?;
         let delta = parsed.get("delta")?;
-        let delta_type = delta.get("type")?.as_str()?;
 
-        match delta_type {
-            "text_delta" => {
-                let text = delta.get("text")?.as_str()?.to_string();
-                Some(StreamEvent::TextDelta(text))
-            }
-            "thinking_delta" => {
-                let text = delta.get("thinking")?.as_str()?.to_string();
-                Some(StreamEvent::ReasoningDelta(text))
-            }
+        match get_str(delta, "type")? {
+            "text_delta" => Some(StreamEvent::TextDelta(get_str(delta, "text")?.to_string())),
+            "thinking_delta" => Some(StreamEvent::ReasoningDelta(
+                get_str(delta, "thinking")?.to_string(),
+            )),
             "input_json_delta" => {
-                let partial = delta.get("partial_json")?.as_str()?.to_string();
                 let index = parsed.get("index")?.as_u64()? as usize;
-                let id = self.index_to_id.get(&index)?.clone();
                 Some(StreamEvent::ToolCallDelta {
-                    id,
-                    arguments_delta: partial,
+                    id: self.index_to_id.get(&index)?.clone(),
+                    arguments_delta: get_str(delta, "partial_json")?.to_string(),
                 })
             }
             _ => None,
         }
     }
 
-    /// Parse content_block_start event
-    fn parse_content_block_start(&mut self, data: &str) -> Option<StreamEvent> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-        let content_block = parsed.get("content_block")?;
-        let index = parsed.get("index")?.as_u64()? as usize;
+    fn parse_block_start(&mut self, data: &str) -> Option<StreamEvent> {
+        let parsed: Value = serde_json::from_str(data).ok()?;
+        let block = parsed.get("content_block")?;
 
-        if content_block.get("type")?.as_str()? != "tool_use" {
+        if get_str(block, "type")? != "tool_use" {
             return None;
         }
 
-        let id = content_block.get("id")?.as_str()?.to_string();
-        let name = content_block.get("name")?.as_str()?.to_string();
+        let index = parsed.get("index")?.as_u64()? as usize;
+        let id = get_str(block, "id")?.to_string();
+        let name = get_str(block, "name")?.to_string();
         self.index_to_id.insert(index, id.clone());
 
         Some(StreamEvent::ToolCallStart { id, name })
     }
 
-    /// Parse content_block_stop event
-    fn parse_content_block_stop(&mut self, data: &str) -> Option<StreamEvent> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+    fn parse_block_stop(&mut self, data: &str) -> Option<StreamEvent> {
+        let parsed: Value = serde_json::from_str(data).ok()?;
         let index = parsed.get("index")?.as_u64()? as usize;
-        let id = self.index_to_id.remove(&index)?;
-        Some(StreamEvent::ToolCallEnd { id })
+        Some(StreamEvent::ToolCallEnd {
+            id: self.index_to_id.remove(&index)?,
+        })
     }
 
-    /// Parse message_delta event
     fn parse_message_delta(data: &str) -> Option<StreamEvent> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+        let parsed: Value = serde_json::from_str(data).ok()?;
 
-        // Check for usage first
         if let Some(usage) = parsed.get("usage") {
-            return Some(parse_anthropic_usage(usage));
+            return Some(parse_usage("input_tokens", "output_tokens", usage));
         }
 
-        // Check for stop reason
-        parsed
-            .get("delta")?
-            .get("stop_reason")
-            .and_then(|v| v.as_str())
-            .map(|stop_reason| StreamEvent::Done {
-                finish_reason: stop_reason.to_string(),
-            })
+        get_str(parsed.get("delta")?, "stop_reason").map(|r| StreamEvent::Done {
+            finish_reason: r.to_string(),
+        })
     }
 
-    /// Parse error event
     fn parse_error(data: &str) -> Option<StreamEvent> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-        let message = parsed
+        let parsed: Value = serde_json::from_str(data).ok()?;
+        let msg = parsed
             .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown error")
-            .to_string();
-        Some(StreamEvent::Error(message))
+            .and_then(|e| get_str(e, "message"))
+            .unwrap_or("Unknown error");
+        Some(StreamEvent::Error(msg.to_string()))
     }
 }
 
-/// Parse SSE event into (event_type, data)
 fn parse_sse_event(event: &str) -> Option<(String, String)> {
     let mut event_type = None;
     let mut data = None;
@@ -137,25 +133,9 @@ fn parse_sse_event(event: &str) -> Option<(String, String)> {
     Some((event_type?, data?))
 }
 
-/// Parse Anthropic usage data
-fn parse_anthropic_usage(usage: &serde_json::Value) -> StreamEvent {
-    StreamEvent::Usage {
-        input_tokens: usage
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-    }
-}
-
 /// Stateful parser for OpenAI SSE streams.
-/// Maintains index-to-ID mapping for tool calls.
 #[derive(Debug, Default)]
 pub struct OpenAIParser {
-    /// Maps tool call index to tool call ID
     index_to_id: HashMap<usize, String>,
 }
 
@@ -164,7 +144,6 @@ impl OpenAIParser {
         Self::default()
     }
 
-    /// Parse a single OpenAI SSE line with state tracking
     pub fn parse(&mut self, line: &str) -> Option<StreamEvent> {
         let data = line.strip_prefix("data: ")?;
 
@@ -174,24 +153,20 @@ impl OpenAIParser {
             });
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+        let parsed: Value = serde_json::from_str(data).ok()?;
 
-        // Check for usage first
         if let Some(usage) = parsed.get("usage") {
-            return Some(parse_openai_usage(usage));
+            return Some(parse_usage("prompt_tokens", "completion_tokens", usage));
         }
 
-        // Parse choice delta
         self.parse_choice_delta(&parsed)
     }
 
-    /// Parse delta from choices array
-    fn parse_choice_delta(&mut self, parsed: &serde_json::Value) -> Option<StreamEvent> {
+    fn parse_choice_delta(&mut self, parsed: &Value) -> Option<StreamEvent> {
         let choice = parsed.get("choices")?.as_array()?.first()?;
         let delta = choice.get("delta")?;
 
-        // Check for finish reason
-        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+        if let Some(reason) = get_str(choice, "finish_reason") {
             if reason != "null" {
                 return Some(StreamEvent::Done {
                     finish_reason: reason.to_string(),
@@ -199,71 +174,42 @@ impl OpenAIParser {
             }
         }
 
-        // Check for content
-        if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+        if let Some(content) = get_str(delta, "content") {
             return Some(StreamEvent::TextDelta(content.to_string()));
         }
 
-        // Check for tool calls
         self.parse_tool_calls(delta)
     }
 
-    /// Parse tool calls from delta
-    fn parse_tool_calls(&mut self, delta: &serde_json::Value) -> Option<StreamEvent> {
-        let tool_calls = delta.get("tool_calls")?.as_array()?;
-
-        for tool_call in tool_calls {
-            if let Some(event) = self.parse_single_tool_call(tool_call) {
+    fn parse_tool_calls(&mut self, delta: &Value) -> Option<StreamEvent> {
+        for tool_call in delta.get("tool_calls")?.as_array()? {
+            if let Some(event) = self.parse_tool_call(tool_call) {
                 return Some(event);
             }
         }
         None
     }
 
-    /// Parse a single tool call entry
-    fn parse_single_tool_call(&mut self, tool_call: &serde_json::Value) -> Option<StreamEvent> {
+    fn parse_tool_call(&mut self, tool_call: &Value) -> Option<StreamEvent> {
         let index = tool_call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
-        // New tool call (has ID)
-        if let Some(id) = tool_call.get("id").and_then(|v| v.as_str()) {
+        // New tool call with ID
+        if let Some(id) = get_str(tool_call, "id") {
             self.index_to_id.insert(index, id.to_string());
-
-            let name = tool_call
-                .get("function")?
-                .get("name")
-                .and_then(|v| v.as_str())?;
-
+            let name = get_str(tool_call.get("function")?, "name")?;
             return Some(StreamEvent::ToolCallStart {
                 id: id.to_string(),
                 name: name.to_string(),
             });
         }
 
-        // Tool call delta (arguments only)
+        // Delta for existing tool call
         let id = self.index_to_id.get(&index)?;
-        let arguments = tool_call
-            .get("function")?
-            .get("arguments")
-            .and_then(|v| v.as_str())?;
-
+        let args = get_str(tool_call.get("function")?, "arguments")?;
         Some(StreamEvent::ToolCallDelta {
             id: id.clone(),
-            arguments_delta: arguments.to_string(),
+            arguments_delta: args.to_string(),
         })
-    }
-}
-
-/// Parse OpenAI usage data
-fn parse_openai_usage(usage: &serde_json::Value) -> StreamEvent {
-    StreamEvent::Usage {
-        input_tokens: usage
-            .get("prompt_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("completion_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
     }
 }
 

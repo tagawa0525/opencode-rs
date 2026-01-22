@@ -17,7 +17,7 @@ pub async fn handle_command_output(
     app: &mut App,
     command_name: &str,
     output: CommandOutput,
-    event_tx: mpsc::Sender<AppEvent>,
+    event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
     // Handle special actions first
     if let Some(action) = &output.action {
@@ -254,9 +254,9 @@ async fn create_new_session(app: &mut App) {
 /// Handle model switch command
 fn handle_model_switch(app: &mut App, model: &str) {
     if let Some((provider_id, model_id)) = provider::parse_model_string(model) {
-        app.provider_id = provider_id.clone();
-        app.model_id = model_id.clone();
         app.model_display = format!("{}/{}", provider_id, model_id);
+        app.provider_id = provider_id;
+        app.model_id = model_id;
         app.model_configured = true;
         app.status = format!("Switched to model: {}", model);
     }
@@ -280,7 +280,7 @@ fn handle_agent_switch(app: &mut App, agent_name: &str) {
 }
 
 /// Start streaming LLM response
-fn start_llm_response(app: &mut App, prompt: &str, event_tx: mpsc::Sender<AppEvent>) {
+fn start_llm_response(app: &mut App, prompt: &str, event_tx: &mpsc::Sender<AppEvent>) {
     app.is_processing = true;
     app.status = "Processing".to_string();
 
@@ -291,12 +291,13 @@ fn start_llm_response(app: &mut App, prompt: &str, event_tx: mpsc::Sender<AppEve
     let provider_id = app.provider_id.clone();
     let model_id = app.model_id.clone();
     let prompt = prompt.to_string();
+    let tx = event_tx.clone();
 
     tokio::spawn(async move {
         match stream_response(&provider_id, &model_id, &prompt).await {
-            Ok(rx) => process_stream_events(rx, event_tx).await,
+            Ok(rx) => process_stream_events(rx, tx).await,
             Err(e) => {
-                let _ = event_tx.send(AppEvent::StreamError(e.to_string())).await;
+                let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
             }
         }
     });
@@ -389,8 +390,9 @@ async fn handle_fork_session(app: &mut App) -> Result<()> {
     use crate::session::{Message, Part};
     use std::collections::HashMap;
 
-    let current_session = match &app.session {
-        Some(s) => s.clone(),
+    // Extract needed info from current session without full clone
+    let (current_session_id, current_session_title) = match &app.session {
+        Some(s) => (s.id.clone(), s.title.clone()),
         None => {
             app.add_message("system", "No active session to fork");
             return Ok(());
@@ -400,14 +402,14 @@ async fn handle_fork_session(app: &mut App) -> Result<()> {
     // Create new session with parent_id
     let new_session = Session::create(CreateSessionOptions {
         project_id: Some("default".to_string()),
-        parent_id: Some(current_session.id.clone()),
-        title: Some(format!("Fork of {}", current_session.title)),
+        parent_id: Some(current_session_id.clone()),
+        title: Some(format!("Fork of {}", current_session_title)),
         ..Default::default()
     })
     .await?;
 
     // Load and copy messages
-    let messages = Message::list(&current_session.id).await?;
+    let messages = Message::list(&current_session_id).await?;
     let mut id_map: HashMap<String, String> = HashMap::new();
 
     for message in messages {
@@ -418,21 +420,21 @@ async fn handle_fork_session(app: &mut App) -> Result<()> {
         let new_id = match &mut new_msg {
             Message::User(ref mut user_msg) => {
                 user_msg.id = id::ascending(IdPrefix::Message);
-                user_msg.session_id = new_session.id.clone();
+                user_msg.session_id.clone_from(&new_session.id);
                 user_msg.id.clone()
             }
             Message::Assistant(ref mut asst_msg) => {
                 asst_msg.id = id::ascending(IdPrefix::Message);
-                asst_msg.session_id = new_session.id.clone();
+                asst_msg.session_id.clone_from(&new_session.id);
                 // Update parent_id using the ID map
                 if let Some(new_parent) = id_map.get(&asst_msg.parent_id) {
-                    asst_msg.parent_id = new_parent.clone();
+                    asst_msg.parent_id.clone_from(new_parent);
                 }
                 asst_msg.id.clone()
             }
         };
 
-        id_map.insert(old_id, new_id.clone());
+        id_map.insert(old_id, new_id);
         new_msg.save().await?;
 
         // Copy parts for this message
@@ -448,17 +450,18 @@ async fn handle_fork_session(app: &mut App) -> Result<()> {
         }
     }
 
-    // Switch to the new forked session
-    app.session = Some(new_session.clone());
+    // Switch to the new forked session - take ownership
     app.session_title = new_session.title.clone();
     app.session_slug = new_session.slug.clone();
+    let session_title = new_session.title.clone();
+    app.session = Some(new_session);
     app.messages.clear();
     app.total_cost = 0.0;
     app.total_tokens = 0;
 
     app.add_message(
         "system",
-        &format!("Session forked successfully: {}", new_session.title),
+        &format!("Session forked successfully: {}", session_title),
     );
 
     Ok(())

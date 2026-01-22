@@ -1,12 +1,15 @@
 //! Permission system for tool execution.
 //!
-//! This module provides permission checks for tool execution, allowing
-//! users to control which tools can run automatically and which require
-//! confirmation.
+//! This module provides:
+//! - Doom loop permission checking for CLI mode
+//! - Configuration-based permission rules
+
+use std::collections::HashMap;
+use std::io::{self, Write};
+
+use anyhow::Result;
 
 use crate::config::{Config, PermissionAction, PermissionRule};
-use anyhow::Result;
-use std::collections::HashMap;
 
 /// Default permission rules for tools
 const DEFAULT_PERMISSIONS: &[(&str, PermissionAction)] = &[
@@ -23,72 +26,55 @@ const DEFAULT_PERMISSIONS: &[(&str, PermissionAction)] = &[
     ("doom_loop", PermissionAction::Ask),
 ];
 
-/// Permission checker for tools
+/// Permission checker for tools (primarily used for doom loop detection in CLI mode)
 pub struct PermissionChecker {
     rules: HashMap<String, PermissionAction>,
 }
 
 impl PermissionChecker {
-    /// Create rules from default permissions
-    fn default_rules() -> HashMap<String, PermissionAction> {
-        DEFAULT_PERMISSIONS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect()
-    }
-
     /// Create a new permission checker from config
     pub fn from_config(config: &Config) -> Self {
         let mut rules = Self::default_rules();
 
-        // Apply config overrides
         if let Some(permissions) = &config.permission {
             for (key, rule) in permissions {
-                match rule {
-                    PermissionRule::Action(action) => {
-                        rules.insert(key.clone(), action.clone());
-                    }
-                    PermissionRule::Object(obj) => {
-                        // For complex objects, use the first action found
-                        if let Some((_, action)) = obj.iter().next() {
-                            rules.insert(key.clone(), action.clone());
-                        }
-                    }
-                }
+                let action = match rule {
+                    PermissionRule::Action(action) => action.clone(),
+                    PermissionRule::Object(obj) => obj
+                        .values()
+                        .next()
+                        .cloned()
+                        .unwrap_or(PermissionAction::Ask),
+                };
+                rules.insert(key.clone(), action);
             }
         }
 
         Self { rules }
     }
 
-    /// Check if doom loop warning should be shown
-    pub fn check_doom_loop(&self) -> PermissionAction {
-        self.rules
-            .get("doom_loop")
-            .cloned()
-            .unwrap_or(PermissionAction::Ask)
-    }
-
-    /// Check doom loop permission and ask if needed
+    /// Check doom loop permission and prompt user if needed
     pub async fn check_doom_loop_and_ask_cli(
         &self,
         tool_name: &str,
         _arguments: &str,
     ) -> Result<bool> {
-        use std::io::{self, Write};
+        let action = self
+            .rules
+            .get("doom_loop")
+            .cloned()
+            .unwrap_or(PermissionAction::Ask);
 
-        match self.check_doom_loop() {
+        match action {
             PermissionAction::Allow => Ok(true),
             PermissionAction::Deny => Ok(false),
             PermissionAction::Ask => {
-                let description = format!(
-                    "Doom loop detected: '{}' called repeatedly with same arguments",
-                    tool_name
-                );
-
                 eprintln!("\n[Permission Required]");
                 eprintln!("Tool: doom_loop");
-                eprintln!("Action: {}", description);
+                eprintln!(
+                    "Action: Doom loop detected: '{}' called repeatedly with same arguments",
+                    tool_name
+                );
                 eprint!("Allow execution? [y/N]: ");
                 io::stderr().flush()?;
 
@@ -99,6 +85,13 @@ impl PermissionChecker {
                 Ok(answer == "y" || answer == "yes")
             }
         }
+    }
+
+    fn default_rules() -> HashMap<String, PermissionAction> {
+        DEFAULT_PERMISSIONS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 }
 
@@ -117,7 +110,12 @@ mod tests {
     #[test]
     fn test_default_permissions() {
         let checker = PermissionChecker::default();
+        let action = checker
+            .rules
+            .get("doom_loop")
+            .cloned()
+            .unwrap_or(PermissionAction::Deny);
 
-        assert!(matches!(checker.check_doom_loop(), PermissionAction::Ask));
+        assert!(matches!(action, PermissionAction::Ask));
     }
 }

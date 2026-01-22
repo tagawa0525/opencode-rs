@@ -180,9 +180,9 @@ impl App {
         };
 
         if let Some((provider_id, model_id)) = model_result {
-            app.provider_id = provider_id.clone();
-            app.model_id = model_id.clone();
             app.model_display = format!("{}/{}", provider_id, model_id);
+            app.provider_id = provider_id;
+            app.model_id = model_id;
             app.model_configured = true;
         } else {
             // No model configured - will show dialog
@@ -331,56 +331,46 @@ impl App {
         self.autocomplete = None;
     }
 
+    /// Get previous character boundary position
+    fn prev_char_boundary(&self) -> usize {
+        self.input[..self.cursor_position]
+            .char_indices()
+            .last()
+            .map_or(0, |(i, _)| i)
+    }
+
+    /// Get next character boundary position
+    fn next_char_boundary(&self) -> usize {
+        self.input[self.cursor_position..]
+            .char_indices()
+            .nth(1)
+            .map_or(self.input.len(), |(i, _)| self.cursor_position + i)
+    }
+
     /// Handle input action
     pub fn handle_action(&mut self, action: Action) {
         match action {
-            Action::Quit => {
-                self.should_quit = true;
-            }
+            Action::Quit => self.should_quit = true,
             Action::Char(c) => {
                 self.input.insert(self.cursor_position, c);
                 self.cursor_position += c.len_utf8();
             }
-            Action::Backspace => {
-                if self.cursor_position > 0 {
-                    let prev_char_boundary = self.input[..self.cursor_position]
-                        .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.input.remove(prev_char_boundary);
-                    self.cursor_position = prev_char_boundary;
-                }
+            Action::Backspace if self.cursor_position > 0 => {
+                let prev = self.prev_char_boundary();
+                self.input.remove(prev);
+                self.cursor_position = prev;
             }
-            Action::Delete => {
-                if self.cursor_position < self.input.len() {
-                    self.input.remove(self.cursor_position);
-                }
+            Action::Delete if self.cursor_position < self.input.len() => {
+                self.input.remove(self.cursor_position);
             }
-            Action::Left => {
-                if self.cursor_position > 0 {
-                    self.cursor_position = self.input[..self.cursor_position]
-                        .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                }
+            Action::Left if self.cursor_position > 0 => {
+                self.cursor_position = self.prev_char_boundary();
             }
-            Action::Right => {
-                if self.cursor_position < self.input.len() {
-                    self.cursor_position = self.input[self.cursor_position..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.cursor_position + i)
-                        .unwrap_or(self.input.len());
-                }
+            Action::Right if self.cursor_position < self.input.len() => {
+                self.cursor_position = self.next_char_boundary();
             }
-            Action::Home => {
-                self.cursor_position = 0;
-            }
-            Action::End => {
-                self.cursor_position = self.input.len();
-            }
+            Action::Home => self.cursor_position = 0,
+            Action::End => self.cursor_position = self.input.len(),
             Action::Newline => {
                 self.input.insert(self.cursor_position, '\n');
                 self.cursor_position += 1;
@@ -389,12 +379,8 @@ impl App {
                 self.input.clear();
                 self.cursor_position = 0;
             }
-            Action::PageUp => {
-                self.history_previous();
-            }
-            Action::PageDown => {
-                self.history_next();
-            }
+            Action::PageUp => self.history_previous(),
+            Action::PageDown => self.history_next(),
             _ => {}
         }
     }
@@ -445,76 +431,63 @@ impl App {
 
     /// Append to the last assistant message
     pub fn append_to_assistant(&mut self, delta: &str) {
-        if let Some(msg) = self.messages.last_mut() {
-            if msg.role == "assistant" {
-                msg.content.push_str(delta);
-            }
+        if let Some(msg) = self.messages.last_mut().filter(|m| m.role == "assistant") {
+            msg.content.push_str(delta);
         }
     }
 
     /// Handle a tool call - groups consecutive calls of the same tool
     pub fn handle_tool_call(&mut self, id: &str, name: &str) {
-        // Check if we should add to existing batch or start a new one
-        let should_start_new_batch = match &self.tool_batch {
-            None => true,
-            Some(batch) => batch.tool_name != name,
-        };
+        let is_same_tool = self
+            .tool_batch
+            .as_ref()
+            .is_some_and(|b| b.tool_name == name);
 
-        if should_start_new_batch {
-            // Finalize previous batch display if exists
-            self.finalize_tool_batch_display();
-
-            // Start new batch
+        if is_same_tool {
+            if let Some(batch) = &mut self.tool_batch {
+                batch.total_count += 1;
+                batch.call_ids.push(id.to_string());
+            }
+            self.update_tool_batch_display();
+        } else {
+            self.clear_tool_batch();
             self.tool_batch = Some(ToolBatch {
                 tool_name: name.to_string(),
                 total_count: 1,
                 completed_count: 0,
                 call_ids: vec![id.to_string()],
             });
-
-            // Add initial display line
             self.append_to_assistant(&format!("[Calling tool: {}]\n", name));
-        } else if let Some(batch) = &mut self.tool_batch {
-            // Add to existing batch
-            batch.total_count += 1;
-            batch.call_ids.push(id.to_string());
-
-            // Update the display line
-            self.update_tool_batch_display();
         }
 
-        // Also add the tool call part
         self.add_tool_call(id, name, "");
     }
 
     /// Handle a tool result - updates progress for batched calls
     pub fn handle_tool_result_grouped(&mut self, id: &str, output: &str, is_error: bool) {
-        let batch_info = self.tool_batch.as_mut().and_then(|batch| {
-            if !batch.call_ids.contains(&id.to_string()) {
-                return None;
-            }
+        let in_batch = self
+            .tool_batch
+            .as_ref()
+            .is_some_and(|b| b.call_ids.contains(&id.to_string()));
+
+        if in_batch {
+            let batch = self.tool_batch.as_mut().unwrap();
             batch.completed_count += 1;
-            Some((
+            let (name, completed, total) = (
                 batch.tool_name.clone(),
                 batch.completed_count,
                 batch.total_count,
-                batch.completed_count >= batch.total_count,
-            ))
-        });
+            );
+            let is_complete = completed >= total;
 
-        if let Some((tool_name, completed, total, is_complete)) = batch_info {
-            self.update_tool_batch_display_with(&tool_name, completed, total);
+            self.update_tool_batch_display_with(&name, completed, total);
             if is_complete {
                 self.tool_batch = None;
             }
         } else {
-            // Not in batch, show individual result
             let status = if is_error { "ERROR" } else { "OK" };
-            let display_output = Self::extract_display_output(output);
-            self.append_to_assistant(&format!(
-                "[Tool {} result: {}] {}\n",
-                id, status, display_output
-            ));
+            let display = Self::extract_display_output(output);
+            self.append_to_assistant(&format!("[Tool {} result: {}] {}\n", id, status, display));
         }
 
         self.add_tool_result(id, output, is_error);
@@ -535,12 +508,9 @@ impl App {
 
     /// Update the tool batch display line with explicit parameters
     fn update_tool_batch_display_with(&mut self, tool_name: &str, completed: usize, total: usize) {
-        let Some(msg) = self.messages.last_mut() else {
+        let Some(msg) = self.messages.last_mut().filter(|m| m.role == "assistant") else {
             return;
         };
-        if msg.role != "assistant" {
-            return;
-        }
 
         let search_prefix = format!("[Calling tool: {}", tool_name);
         let replacement = if total > 1 {
@@ -549,38 +519,22 @@ impl App {
             format!("[Calling tool: {}]", tool_name)
         };
 
-        // Find and update the last tool call line (searching from end)
-        let new_content: String = msg
-            .content
-            .lines()
-            .rev()
-            .scan(false, |found, line| {
-                if !*found && line.contains(&search_prefix) {
-                    *found = true;
-                    Some(replacement.clone())
-                } else {
-                    Some(line.to_string())
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Find and replace the last matching line
+        if let Some(pos) = msg.content.rfind(&search_prefix) {
+            let line_start = msg.content[..pos].rfind('\n').map_or(0, |p| p + 1);
+            let line_end = msg.content[pos..]
+                .find('\n')
+                .map_or(msg.content.len(), |p| pos + p);
+            msg.content
+                .replace_range(line_start..line_end, &replacement);
+        }
 
-        msg.content = new_content;
         if !msg.content.ends_with('\n') {
             msg.content.push('\n');
         }
     }
 
-    /// Finalize tool batch display when switching to a new tool
-    fn finalize_tool_batch_display(&mut self) {
-        // Nothing special needed - the last state is already displayed
-        self.tool_batch = None;
-    }
-
-    /// Clear tool batch (call when stream completes)
+    /// Clear tool batch (call when stream completes or switching tools)
     pub fn clear_tool_batch(&mut self) {
         self.tool_batch = None;
     }
@@ -604,81 +558,54 @@ impl App {
 
     /// Initialize slash commands
     pub async fn init_commands(&mut self, config: &Config) {
-        // Register built-in commands
-        self.command_registry.register(Arc::new(HelpCommand)).await;
-        self.command_registry.register(Arc::new(ClearCommand)).await;
-        self.command_registry.register(Arc::new(ModelCommand)).await;
-        self.command_registry.register(Arc::new(AgentCommand)).await;
-        self.command_registry.register(Arc::new(ExitCommand)).await;
-        self.command_registry
-            .register(Arc::new(ConnectCommand))
-            .await;
+        use crate::slash_command::SlashCommand;
 
-        // Session management commands
-        self.command_registry.register(Arc::new(UndoCommand)).await;
-        self.command_registry.register(Arc::new(RedoCommand)).await;
-        self.command_registry
-            .register(Arc::new(CompactCommand))
-            .await;
-        self.command_registry
-            .register(Arc::new(UnshareCommand))
-            .await;
-        self.command_registry
-            .register(Arc::new(RenameCommand))
-            .await;
-        self.command_registry.register(Arc::new(CopyCommand)).await;
-        self.command_registry
-            .register(Arc::new(ExportCommand))
-            .await;
-        self.command_registry
-            .register(Arc::new(TimelineCommand))
-            .await;
-        self.command_registry.register(Arc::new(ForkCommand)).await;
-        self.command_registry
-            .register(Arc::new(ThinkingCommand))
-            .await;
-        self.command_registry.register(Arc::new(ShareCommand)).await;
-        self.command_registry
-            .register(Arc::new(SessionCommand))
-            .await;
+        // Built-in commands
+        let commands: Vec<Arc<dyn SlashCommand>> = vec![
+            Arc::new(HelpCommand),
+            Arc::new(ClearCommand),
+            Arc::new(ModelCommand),
+            Arc::new(AgentCommand),
+            Arc::new(ExitCommand),
+            Arc::new(ConnectCommand),
+            Arc::new(UndoCommand),
+            Arc::new(RedoCommand),
+            Arc::new(CompactCommand),
+            Arc::new(UnshareCommand),
+            Arc::new(RenameCommand),
+            Arc::new(CopyCommand),
+            Arc::new(ExportCommand),
+            Arc::new(TimelineCommand),
+            Arc::new(ForkCommand),
+            Arc::new(ThinkingCommand),
+            Arc::new(ShareCommand),
+            Arc::new(SessionCommand),
+            Arc::new(StatusCommand),
+            Arc::new(McpCommand),
+            Arc::new(ThemeCommand),
+            Arc::new(EditorCommand),
+            Arc::new(CommandsCommand::new()),
+            Arc::new(InitCommand),
+            Arc::new(ReviewCommand),
+        ];
 
-        // UI and system commands
-        self.command_registry
-            .register(Arc::new(StatusCommand))
-            .await;
-        self.command_registry.register(Arc::new(McpCommand)).await;
-        self.command_registry.register(Arc::new(ThemeCommand)).await;
-        self.command_registry
-            .register(Arc::new(EditorCommand))
-            .await;
-        self.command_registry
-            .register(Arc::new(CommandsCommand::new()))
-            .await;
+        for cmd in commands {
+            self.command_registry.register(cmd).await;
+        }
 
-        // Project commands
-        self.command_registry.register(Arc::new(InitCommand)).await;
-        self.command_registry
-            .register(Arc::new(ReviewCommand))
-            .await;
-
-        // Register custom commands from config
+        // Custom commands from config
         if let Some(commands) = &config.command {
             for (name, cmd_config) in commands {
-                let template_cmd = TemplateCommand::new(name.clone(), cmd_config.clone());
-                self.command_registry.register(Arc::new(template_cmd)).await;
+                let cmd = TemplateCommand::new(name.clone(), cmd_config.clone());
+                self.command_registry.register(Arc::new(cmd)).await;
             }
         }
 
-        // Load commands from markdown files
-        match crate::slash_command::loader::load_all_commands().await {
-            Ok(commands) => {
-                for cmd in commands {
-                    tracing::info!("Registering command from markdown: {}", cmd.name());
-                    self.command_registry.register(cmd).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load commands from markdown files: {}", e);
+        // Commands from markdown files
+        if let Ok(commands) = crate::slash_command::loader::load_all_commands().await {
+            for cmd in commands {
+                tracing::info!("Registering command from markdown: {}", cmd.name());
+                self.command_registry.register(cmd).await;
             }
         }
     }

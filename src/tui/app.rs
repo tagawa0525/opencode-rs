@@ -112,10 +112,9 @@ async fn handle_autocomplete_input(
         KeyCode::Enter | KeyCode::Tab => {
             if let Some(command_name) = app.insert_autocomplete_selection() {
                 let ctx = create_command_context(app);
-                let registry = app.command_registry.clone();
-                match registry.execute(&command_name, "", &ctx).await {
+                match app.command_registry.execute(&command_name, "", &ctx).await {
                     Ok(output) => {
-                        handle_command_output(app, &command_name, output, event_tx.clone()).await?;
+                        handle_command_output(app, &command_name, output, event_tx).await?;
                     }
                     Err(e) => {
                         app.add_message("system", &format!("Error: {}", e));
@@ -150,10 +149,13 @@ async fn execute_slash_command(
     event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
     let ctx = create_command_context(app);
-    let registry = app.command_registry.clone();
-    match registry.execute(&parsed.name, &parsed.args, &ctx).await {
+    match app
+        .command_registry
+        .execute(&parsed.name, &parsed.args, &ctx)
+        .await
+    {
         Ok(output) => {
-            handle_command_output(app, &parsed.name, output, event_tx.clone()).await?;
+            handle_command_output(app, &parsed.name, output, event_tx).await?;
         }
         Err(e) => {
             app.add_message("system", &format!("Error: {}", e));
@@ -175,9 +177,8 @@ fn start_llm_stream(app: &mut App, input: &str, event_tx: &mpsc::Sender<AppEvent
     let prompt = input.to_string();
 
     tokio::spawn(async move {
-        if let Err(e) = stream_response_agentic(provider_id, model_id, prompt, tx.clone()).await {
-            let _ = tx.send(AppEvent::StreamError(e.to_string())).await;
-        }
+        // Error is already handled inside stream_response_agentic via the event_tx
+        let _ = stream_response_agentic(provider_id, model_id, prompt, tx).await;
     });
 }
 
@@ -235,7 +236,7 @@ async fn handle_key_input(
 
     // Handle dialog input if dialog is open
     if app.dialog.is_some() {
-        handle_dialog_input(app, key, event_tx.clone()).await?;
+        handle_dialog_input(app, key, event_tx).await?;
         return Ok(());
     }
 
@@ -370,14 +371,7 @@ fn handle_permission_response(
 
 /// Handle question reply event
 fn handle_question_reply(app: &mut App, id: &str, answers: Vec<Vec<String>>) {
-    // Send response to waiting tool
-    let id_clone = id.to_string();
-    let answers_clone = answers.clone();
-    tokio::spawn(async move {
-        super::llm_streaming::send_question_response(id_clone, answers_clone).await;
-    });
-
-    // Format answers for display
+    // Format answers for display first, before moving answers
     let formatted_answers: Vec<String> = answers
         .iter()
         .filter(|a| !a.is_empty())
@@ -389,6 +383,12 @@ fn handle_question_reply(app: &mut App, id: &str, answers: Vec<Vec<String>>) {
     } else {
         format!("Question answered: {}", formatted_answers.join(" | "))
     };
+
+    // Send response to waiting tool - move answers into the spawn
+    let id_owned = id.to_string();
+    tokio::spawn(async move {
+        super::llm_streaming::send_question_response(id_owned, answers).await;
+    });
 }
 
 /// Process all pending async events
