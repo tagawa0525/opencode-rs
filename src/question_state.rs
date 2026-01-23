@@ -10,25 +10,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::tool::{QuestionInfo, QuestionResponse};
+use crate::tool::QuestionResponse;
 
 /// Question request information
 #[derive(Debug, Clone)]
 pub struct QuestionRequestInfo {
     pub id: String,
-    pub questions: Vec<QuestionInfo>,
 }
 
 // Global question state
-lazy_static::lazy_static! {
-    /// Response channels for pending question requests
-    static ref QUESTION_RESPONSES: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+use std::sync::LazyLock;
 
-    /// Pending question requests
-    static ref PENDING_QUESTIONS: Arc<Mutex<HashMap<String, QuestionRequestInfo>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-}
+/// Type alias for question response channels map
+type QuestionChannelMap = HashMap<String, tokio::sync::oneshot::Sender<QuestionResponse>>;
+
+/// Response channels for pending question requests
+static QUESTION_RESPONSES: LazyLock<Arc<Mutex<QuestionChannelMap>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Pending question requests
+static PENDING_QUESTIONS: LazyLock<Arc<Mutex<HashMap<String, QuestionRequestInfo>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Store a response channel for a question request
 pub async fn store_response_channel(
@@ -78,7 +80,6 @@ pub fn create_tui_question_handler(
             // Store pending request
             store_pending_request(QuestionRequestInfo {
                 id: request_clone.id.clone(),
-                questions: request_clone.questions.clone(),
             })
             .await;
 

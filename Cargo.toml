@@ -18,7 +18,6 @@ path = "src/main.rs"
 [dependencies]
 # Async runtime
 tokio = { version = "1.49.0", features = ["full"] }
-tokio-stream = "0.1.18"
 futures = "0.3.31"
 async-trait = "0.1.89"
 
@@ -59,27 +58,19 @@ chrono = { version = "0.4.43", features = ["serde"] }
 dirs = "6.0.0"
 glob = "0.3.3"
 ignore = "0.4.25"
-walkdir = "2.5.0"
 notify = "8.2.0"
 
 # Config parsing
 jsonc-parser = "0.29.0"
 
 # String utilities
-slugify = "0.1.0"
 regex = "1.12.2"
 similar = "2.7.0"  # for diffs
 fuzzy-matcher = "0.3.7"  # for fuzzy searching
 
-# Async channels
-async-channel = "2.5.0"
-tokio-util = { version = "0.7.18", features = ["codec"] }
 
 # Shell/Process
 which = "8.0.0"
-
-# Terminal colors
-owo-colors = "4.2.3"
 
 # Syntax highlighting
 syntect = "5.3.0"
@@ -94,9 +85,6 @@ base64 = "0.22.1"
 # URL encoding
 urlencoding = "2.1.3"
 
-# Lazy static initialization
-lazy_static = "1.5.0"
-
 # MIME type detection
 mime_guess = "2.0.5"
 
@@ -107,19 +95,12 @@ yaml-rust2 = "0.11.0"
 # Temp files
 tempfile = "3.24.0"
 
-# TTY detection
-atty = "0.2.14"
-
 # Open URLs in browser
 open = "5.3.3"
 
 [dev-dependencies]
 tokio-test = "0.4.5"
 pretty_assertions = "1.4.1"
-
-[lints.rust]
-dead_code = "allow"
-unused_imports = "allow"
 
 [profile.release]
 lto = true

@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -126,18 +126,6 @@ impl Storage {
         Ok(Some(data))
     }
 
-    /// Update data in storage using a closure
-    pub async fn update<T, F>(&self, key: &[&str], updater: F) -> Result<T>
-    where
-        T: Serialize + DeserializeOwned + Default,
-        F: FnOnce(&mut T),
-    {
-        let mut data: T = self.read(key).await?.unwrap_or_default();
-        updater(&mut data);
-        self.write(key, &data).await?;
-        Ok(data)
-    }
-
     /// Remove data from storage
     pub async fn remove(&self, key: &[&str]) -> Result<()> {
         let path = self.key_to_path(key);
@@ -197,23 +185,11 @@ impl Storage {
 
         Ok(items)
     }
-
-    /// Check if a key exists
-    pub async fn exists(&self, key: &[&str]) -> bool {
-        let path = self.key_to_path(key);
-        path.exists()
-    }
-
-    /// Get the base storage path
-    pub fn base_path(&self) -> &Path {
-        &self.config.base_path
-    }
 }
 
 // Global storage instance
-lazy_static::lazy_static! {
-    static ref GLOBAL_STORAGE: Storage = Storage::with_defaults();
-}
+static GLOBAL_STORAGE: std::sync::LazyLock<Storage> =
+    std::sync::LazyLock::new(Storage::with_defaults);
 
 /// Get the global storage instance
 pub fn global() -> &'static Storage {
@@ -251,31 +227,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update() {
-        let dir = tempdir().unwrap();
-        let storage = Storage::new(StorageConfig {
-            base_path: dir.path().to_path_buf(),
-        });
-
-        let initial = TestData {
-            name: "initial".to_string(),
-            value: 1,
-        };
-
-        storage.write(&["test", "item"], &initial).await.unwrap();
-
-        let updated: TestData = storage
-            .update(&["test", "item"], |data: &mut TestData| {
-                data.value = 100;
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(updated.value, 100);
-        assert_eq!(updated.name, "initial");
-    }
-
-    #[tokio::test]
     async fn test_list() {
         let dir = tempdir().unwrap();
         let storage = Storage::new(StorageConfig {
@@ -308,9 +259,9 @@ mod tests {
         };
 
         storage.write(&["test", "item"], &data).await.unwrap();
-        assert!(storage.exists(&["test", "item"]).await);
 
         storage.remove(&["test", "item"]).await.unwrap();
-        assert!(!storage.exists(&["test", "item"]).await);
+        let read_result: Option<TestData> = storage.read(&["test", "item"]).await.unwrap();
+        assert!(read_result.is_none());
     }
 }

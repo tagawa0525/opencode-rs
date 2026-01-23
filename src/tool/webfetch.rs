@@ -6,6 +6,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 const DESCRIPTION: &str = r#"- Fetches content from a specified URL
 - Takes a URL and optional format as input
@@ -44,10 +45,6 @@ pub struct WebFetchTool;
 
 #[async_trait::async_trait]
 impl Tool for WebFetchTool {
-    fn id(&self) -> &str {
-        "webfetch"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "webfetch".to_string(),
@@ -95,9 +92,10 @@ impl Tool for WebFetchTool {
         };
 
         // Request permission before fetching
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("url".to_string(), json!(url));
-        metadata.insert("format".to_string(), json!(params.format));
+        let mut metadata = HashMap::from([
+            ("url".to_string(), json!(url)),
+            ("format".to_string(), json!(params.format)),
+        ]);
         if let Some(timeout) = params.timeout {
             metadata.insert("timeout".to_string(), json!(timeout));
         }
@@ -109,7 +107,7 @@ impl Tool for WebFetchTool {
             .ask_permission(
                 "webfetch".to_string(),
                 vec![url.clone()],
-                vec![domain_pattern, "*".to_string()], // Allow domain pattern or all URLs
+                vec![domain_pattern, "*".to_string()],
                 metadata,
             )
             .await?;

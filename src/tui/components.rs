@@ -3,9 +3,9 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{Block, Paragraph, Widget, Wrap},
 };
 
 use super::theme::Theme;
@@ -62,9 +62,7 @@ impl<'a> Widget for Header<'a> {
 pub struct MessageWidget<'a> {
     pub role: &'a str,
     pub content: &'a str,
-    pub timestamp: &'a str,
     pub theme: &'a Theme,
-    pub selected: bool,
 }
 
 impl<'a> Widget for MessageWidget<'a> {
@@ -95,9 +93,7 @@ impl<'a> Widget for MessageWidget<'a> {
 /// Input box component
 pub struct InputBox<'a> {
     pub content: &'a str,
-    pub cursor_position: usize,
     pub placeholder: &'a str,
-    pub focused: bool,
     pub theme: &'a Theme,
 }
 
@@ -153,105 +149,5 @@ impl<'a> Widget for StatusBar<'a> {
             .style(self.theme.text_dim())
             .alignment(Alignment::Right);
         right.render(chunks[2], buf);
-    }
-}
-
-/// Loading spinner component
-pub struct Spinner<'a> {
-    pub message: &'a str,
-    pub frame: usize,
-    pub theme: &'a Theme,
-}
-
-impl<'a> Widget for Spinner<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let frame = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
-        let text = if self.message.is_empty() {
-            format!(" {}", frame)
-        } else {
-            format!(" {} {}", frame, self.message)
-        };
-
-        Paragraph::new(text)
-            .style(self.theme.text_accent())
-            .alignment(Alignment::Left)
-            .render(area, buf);
-    }
-}
-
-/// Dialog component for overlays
-pub struct Dialog<'a> {
-    pub title: &'a str,
-    pub content: &'a str,
-    pub theme: &'a Theme,
-}
-
-impl<'a> Widget for Dialog<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        // Calculate centered position
-        let width = area.width.min(60);
-        let height = area.height.min(20);
-        let x = (area.width.saturating_sub(width)) / 2;
-        let y = (area.height.saturating_sub(height)) / 2;
-
-        let dialog_area = Rect::new(x, y, width, height);
-
-        // Clear the area
-        Clear.render(dialog_area, buf);
-
-        // Draw the dialog
-        let block = Block::default()
-            .title(format!(" {} ", self.title))
-            .borders(Borders::ALL)
-            .border_style(self.theme.border(true))
-            .style(Style::default().bg(self.theme.background));
-
-        let inner = block.inner(dialog_area);
-        block.render(dialog_area, buf);
-
-        let paragraph = Paragraph::new(self.content)
-            .style(self.theme.text())
-            .wrap(Wrap { trim: true });
-        paragraph.render(inner, buf);
-    }
-}
-
-/// Tool output component
-pub struct ToolOutput<'a> {
-    pub tool_name: &'a str,
-    pub title: &'a str,
-    pub output: &'a str,
-    pub collapsed: bool,
-    pub theme: &'a Theme,
-}
-
-impl<'a> Widget for ToolOutput<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let header = Line::from(vec![
-            Span::styled(
-                if self.collapsed { "▶ " } else { "▼ " },
-                self.theme.text_dim(),
-            ),
-            Span::styled(format!("[{}] ", self.tool_name), self.theme.tool()),
-            Span::styled(self.title, self.theme.text()),
-        ]);
-
-        if self.collapsed {
-            let paragraph = Paragraph::new(header);
-            paragraph.render(area, buf);
-        } else {
-            let output_lines: Vec<Line> = self
-                .output
-                .lines()
-                .take(10) // Limit displayed lines
-                .map(|line| Line::from(Span::styled(format!("  {}", line), self.theme.text_dim())))
-                .collect();
-
-            let mut lines = vec![header];
-            lines.extend(output_lines);
-
-            let paragraph = Paragraph::new(lines);
-            paragraph.render(area, buf);
-        }
     }
 }

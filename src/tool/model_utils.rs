@@ -197,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_calculate_output_limit_no_model() {
-        let ctx = ToolContext::new("test-session", "test-message", "test-agent");
+        let ctx = ToolContext::new("test-session", "test-message");
         let limit = calculate_webfetch_output_limit(&ctx, false).await;
         assert_eq!(limit, 2 * 1024); // Default 2KB
     }

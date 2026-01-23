@@ -24,9 +24,6 @@ pub struct TodoWriteParams {
     pub todos: Vec<TodoInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoReadParams {}
-
 /// Get the path to the todo file for a session
 fn get_todo_path(session_id: &str) -> Result<PathBuf> {
     // Store todos in a .opencode directory in the user's home or project root
@@ -47,10 +44,6 @@ pub struct TodoWriteTool;
 
 #[async_trait::async_trait]
 impl Tool for TodoWriteTool {
-    fn id(&self) -> &str {
-        "todowrite"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "todowrite".to_string(),
@@ -135,10 +128,6 @@ pub struct TodoReadTool;
 
 #[async_trait::async_trait]
 impl Tool for TodoReadTool {
-    fn id(&self) -> &str {
-        "todoread"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "todoread".to_string(),

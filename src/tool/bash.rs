@@ -37,10 +37,6 @@ struct CommandOutput {
 
 #[async_trait::async_trait]
 impl Tool for BashTool {
-    fn id(&self) -> &str {
-        "bash"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "bash".to_string(),
@@ -93,28 +89,17 @@ impl Tool for BashTool {
         }
 
         // Request permission before executing bash command
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("command".to_string(), serde_json::json!(args.command));
-        metadata.insert("workdir".to_string(), serde_json::json!(args.workdir));
-        metadata.insert("timeout".to_string(), serde_json::json!(args.timeout_ms));
+        let metadata = HashMap::from([
+            ("command".to_string(), json!(args.command)),
+            ("workdir".to_string(), json!(args.workdir)),
+            ("timeout".to_string(), json!(args.timeout_ms)),
+        ]);
 
-        let allowed = ctx
-            .ask_permission(
-                "bash".to_string(),
-                vec![args.command.clone()],
-                vec!["*".to_string()],
-                metadata,
-            )
-            .await?;
-
-        if !allowed {
-            return Ok(ToolResult::error(
-                "Permission Denied",
-                format!(
-                    "User denied permission to execute bash command: {}",
-                    args.command
-                ),
-            ));
+        if let Some(denied) = ctx
+            .require_permission("bash", vec![args.command.clone()], metadata)
+            .await?
+        {
+            return Ok(denied);
         }
 
         // Execute the command
@@ -149,21 +134,13 @@ fn parse_args(args: Value, ctx: &ToolContext) -> Result<BashArgs> {
         .ok_or_else(|| anyhow::anyhow!("command is required"))?
         .to_string();
 
-    // Resolve workdir: if not absolute, join with cwd (like TypeScript version)
+    // Resolve workdir using context helper
     let workdir_arg = args
         .get("workdir")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| ctx.cwd.clone());
+        .unwrap_or(&ctx.cwd);
 
-    let workdir = if std::path::Path::new(&workdir_arg).is_absolute() {
-        workdir_arg
-    } else {
-        std::path::Path::new(&ctx.cwd)
-            .join(&workdir_arg)
-            .to_string_lossy()
-            .to_string()
-    };
+    let workdir = ctx.resolve_path(workdir_arg).to_string_lossy().to_string();
 
     let timeout_ms = args
         .get("timeout")

@@ -254,44 +254,49 @@ impl App {
             .unwrap_or_else(|| provider_id.to_string())
     }
 
-    /// Start GitHub Copilot OAuth device flow
-    pub fn start_copilot_oauth(&mut self) {
-        let mut dialog = DialogState::new(DialogType::OAuthWaiting, "GitHub Copilot Sign In");
-        dialog.message = Some("Requesting device code...".to_string());
+    /// Start OAuth flow for a provider
+    fn start_oauth_dialog(&mut self, provider_id: &str, title: &str, message: &str) {
+        let mut dialog = DialogState::new(DialogType::OAuthWaiting, title);
+        dialog.message = Some(message.to_string());
         dialog.items = vec![SelectItem {
-            id: "copilot".to_string(),
-            label: "copilot".to_string(),
+            id: provider_id.to_string(),
+            label: provider_id.to_string(),
             description: None,
-            provider_id: Some("copilot".to_string()),
+            provider_id: Some(provider_id.to_string()),
         }];
         self.dialog = Some(dialog);
     }
 
-    /// Update dialog with device code info
-    pub fn show_device_code(&mut self, user_code: &str, verification_uri: &str, device_code: &str) {
-        if let Some(dialog) = &mut self.dialog {
-            dialog.dialog_type = DialogType::OAuthDeviceCode;
-            dialog.user_code = Some(user_code.to_string());
-            dialog.verification_uri = Some(verification_uri.to_string());
-            dialog.device_code = Some(device_code.to_string());
-            dialog.message = Some(format!(
-                "Go to: {}\n\nEnter code: {}",
-                verification_uri, user_code
-            ));
-        }
+    /// Start GitHub Copilot OAuth device flow
+    pub fn start_copilot_oauth(&mut self) {
+        self.start_oauth_dialog(
+            "copilot",
+            "GitHub Copilot Sign In",
+            "Requesting device code...",
+        );
     }
 
     /// Start OpenAI OAuth PKCE flow
     pub fn start_openai_oauth(&mut self) {
-        let mut dialog = DialogState::new(DialogType::OAuthWaiting, "ChatGPT Sign In");
-        dialog.message = Some("Opening browser for authentication...".to_string());
-        dialog.items = vec![SelectItem {
-            id: "openai".to_string(),
-            label: "openai".to_string(),
-            description: None,
-            provider_id: Some("openai".to_string()),
-        }];
-        self.dialog = Some(dialog);
+        self.start_oauth_dialog(
+            "openai",
+            "ChatGPT Sign In",
+            "Opening browser for authentication...",
+        );
+    }
+
+    /// Update dialog with device code info
+    pub fn show_device_code(&mut self, user_code: &str, verification_uri: &str) {
+        let Some(dialog) = &mut self.dialog else {
+            return;
+        };
+        dialog.dialog_type = DialogType::OAuthDeviceCode;
+        dialog.user_code = Some(user_code.to_string());
+        dialog.verification_uri = Some(verification_uri.to_string());
+        dialog.message = Some(format!(
+            "Go to: {}\n\nEnter code: {}",
+            verification_uri, user_code
+        ));
     }
 
     /// Open question dialog
@@ -308,12 +313,13 @@ impl App {
 
 /// Handle input for model/provider selector dialogs
 async fn handle_selector_input(app: &mut App, key_code: KeyCode) -> Result<()> {
+    let Some(dialog) = &mut app.dialog else {
+        return Ok(());
+    };
+
     match key_code {
         KeyCode::Esc => {
-            // Close dialog, but if model not configured, quit
-            if !app.model_configured
-                && app.dialog.as_ref().map(|d| &d.dialog_type) == Some(&DialogType::ModelSelector)
-            {
+            if !app.model_configured && dialog.dialog_type == DialogType::ModelSelector {
                 app.should_quit = true;
             }
             app.close_dialog();
@@ -321,27 +327,15 @@ async fn handle_selector_input(app: &mut App, key_code: KeyCode) -> Result<()> {
         KeyCode::Enter => {
             handle_selector_enter(app).await?;
         }
-        KeyCode::Up => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_up();
-            }
-        }
-        KeyCode::Down => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_down();
-            }
-        }
+        KeyCode::Up => dialog.move_up(),
+        KeyCode::Down => dialog.move_down(),
         KeyCode::Char(c) => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.search_query.push(c);
-                dialog.update_filter();
-            }
+            dialog.search_query.push(c);
+            dialog.update_filter();
         }
         KeyCode::Backspace => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.search_query.pop();
-                dialog.update_filter();
-            }
+            dialog.search_query.pop();
+            dialog.update_filter();
         }
         _ => {}
     }
@@ -350,17 +344,14 @@ async fn handle_selector_input(app: &mut App, key_code: KeyCode) -> Result<()> {
 
 /// Handle Enter key in selector dialogs
 async fn handle_selector_enter(app: &mut App) -> Result<()> {
-    let (item_id, dialog_type) = {
-        let dialog = match &app.dialog {
-            Some(d) => d,
-            None => return Ok(()),
-        };
-        let item = match dialog.selected_item() {
-            Some(i) => i,
-            None => return Ok(()),
-        };
-        (item.id.clone(), dialog.dialog_type.clone())
+    let Some(dialog) = &app.dialog else {
+        return Ok(());
     };
+    let Some(item) = dialog.selected_item() else {
+        return Ok(());
+    };
+    let item_id = item.id.clone();
+    let dialog_type = dialog.dialog_type.clone();
 
     match dialog_type {
         DialogType::ModelSelector => {
@@ -372,9 +363,7 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
             let has_key = app
                 .all_providers
                 .iter()
-                .find(|p| p.id == item_id)
-                .map(|p| p.key.is_some())
-                .unwrap_or(false);
+                .any(|p| p.id == item_id && p.key.is_some());
 
             if has_key {
                 app.close_dialog();
@@ -385,27 +374,19 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
         }
         DialogType::SessionList => {
             use crate::session::Session;
-
-            // Load the selected session
             if let Ok(Some(session)) = Session::get("default", &item_id).await {
-                // Update app state
-                app.session = Some(session.clone());
                 app.session_title = session.title.clone();
                 app.session_slug = session.slug.clone();
-
-                // Clear messages - they will be loaded on demand
+                let session_title = session.title.clone();
+                app.session = Some(session);
                 app.messages.clear();
                 app.total_cost = 0.0;
                 app.total_tokens = 0;
-
-                app.add_message("system", &format!("Switched to session: {}", session.title));
+                app.add_message("system", &format!("Switched to session: {}", session_title));
             }
-
             app.close_dialog();
         }
         DialogType::AgentSelector => {
-            // Switch to the selected agent
-            // TODO: Implement full agent system with prompts and configurations
             app.status = format!(
                 "Agent switching to '{}' - agent system under development",
                 item_id
@@ -420,10 +401,8 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
             app.close_dialog();
         }
         DialogType::Timeline => {
-            // Parse the message index from the item ID
             if let Ok(msg_index) = item_id.parse::<usize>() {
                 if let Some(msg) = app.messages.get(msg_index) {
-                    // Display the full message content
                     app.add_message(
                         "system",
                         &format!(
@@ -443,18 +422,12 @@ async fn handle_selector_enter(app: &mut App) -> Result<()> {
     Ok(())
 }
 
-/// Handle text input for dialogs (shared logic for API key and rename dialogs)
-fn handle_text_input_key(app: &mut App, key_code: KeyCode) {
+/// Handle character input for text dialogs
+fn handle_text_char(dialog: &mut DialogState, key_code: KeyCode) {
     match key_code {
-        KeyCode::Char(c) => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.input_value.push(c);
-            }
-        }
+        KeyCode::Char(c) => dialog.input_value.push(c),
         KeyCode::Backspace => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.input_value.pop();
-            }
+            dialog.input_value.pop();
         }
         _ => {}
     }
@@ -465,7 +438,11 @@ async fn handle_api_key_input(app: &mut App, key_code: KeyCode) -> Result<()> {
     match key_code {
         KeyCode::Esc => app.open_provider_selector(),
         KeyCode::Enter => handle_api_key_submit(app).await?,
-        _ => handle_text_input_key(app, key_code),
+        _ => {
+            if let Some(dialog) = &mut app.dialog {
+                handle_text_char(dialog, key_code);
+            }
+        }
     }
     Ok(())
 }
@@ -475,7 +452,11 @@ async fn handle_rename_input(app: &mut App, key_code: KeyCode) -> Result<()> {
     match key_code {
         KeyCode::Esc => app.close_dialog(),
         KeyCode::Enter => handle_rename_submit(app).await?,
-        _ => handle_text_input_key(app, key_code),
+        _ => {
+            if let Some(dialog) = &mut app.dialog {
+                handle_text_char(dialog, key_code);
+            }
+        }
     }
     Ok(())
 }
@@ -562,54 +543,30 @@ async fn handle_auth_method_input(
     key_code: KeyCode,
     event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
+    let Some(dialog) = &mut app.dialog else {
+        return Ok(());
+    };
+
     match key_code {
-        KeyCode::Esc => {
-            app.open_provider_selector();
-        }
+        KeyCode::Esc => app.open_provider_selector(),
+        KeyCode::Up => dialog.move_up(),
+        KeyCode::Down => dialog.move_down(),
         KeyCode::Enter => {
-            handle_auth_method_enter(app, event_tx).await;
-        }
-        KeyCode::Up => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_up();
-            }
-        }
-        KeyCode::Down => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_down();
+            let Some(item) = dialog.selected_item() else {
+                return Ok(());
+            };
+            let auth_method = item.id.clone();
+            let provider_id = item.provider_id.clone().unwrap_or_default();
+
+            match auth_method.as_str() {
+                "oauth" => start_oauth_flow(app, &provider_id, event_tx),
+                "api_key" => app.open_api_key_input(&provider_id),
+                _ => {}
             }
         }
         _ => {}
     }
     Ok(())
-}
-
-/// Handle Enter key in auth method selector
-async fn handle_auth_method_enter(app: &mut App, event_tx: &mpsc::Sender<AppEvent>) {
-    let (auth_method, provider_id) = {
-        let dialog = match &app.dialog {
-            Some(d) => d,
-            None => return,
-        };
-        let item = match dialog.selected_item() {
-            Some(i) => i,
-            None => return,
-        };
-        (
-            item.id.clone(),
-            item.provider_id.clone().unwrap_or_default(),
-        )
-    };
-
-    match auth_method.as_str() {
-        "oauth" => {
-            start_oauth_flow(app, &provider_id, event_tx);
-        }
-        "api_key" => {
-            app.open_api_key_input(&provider_id);
-        }
-        _ => {}
-    }
 }
 
 /// Start OAuth flow for a provider
@@ -633,72 +590,56 @@ fn start_oauth_flow(app: &mut App, provider_id: &str, event_tx: &mpsc::Sender<Ap
     }
 }
 
+/// Map permission option index to (allow, scope)
+fn permission_option_to_response(index: usize) -> Option<(bool, crate::tool::PermissionScope)> {
+    use crate::tool::PermissionScope;
+    match index {
+        0 => Some((true, PermissionScope::Once)),
+        1 => Some((true, PermissionScope::Session)),
+        2 => Some((true, PermissionScope::Workspace)),
+        3 => Some((true, PermissionScope::Global)),
+        4 => Some((false, PermissionScope::Once)),
+        _ => None,
+    }
+}
+
 /// Handle input for permission request dialog
 async fn handle_permission_input(
     app: &mut App,
     key_code: KeyCode,
     event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
-    let permission_id = app
-        .dialog
-        .as_ref()
-        .and_then(|d| d.permission_request.as_ref())
-        .map(|r| r.id.clone());
+    use crate::tool::PermissionScope;
 
-    let id = match permission_id {
-        Some(id) => id,
-        None => return Ok(()),
+    let Some(dialog) = &mut app.dialog else {
+        return Ok(());
     };
+    let Some(permission_request) = &dialog.permission_request else {
+        return Ok(());
+    };
+    let id = permission_request.id.clone();
 
-    // Handle arrow key navigation
+    // Arrow key navigation
     match key_code {
         KeyCode::Left => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_permission_left();
-            }
+            dialog.move_permission_left();
             return Ok(());
         }
         KeyCode::Right => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.move_permission_right();
-            }
+            dialog.move_permission_right();
             return Ok(());
         }
         _ => {}
     }
 
-    // Get the response based on key press or current selection
+    // Get response based on key press or current selection
     let response = match key_code {
-        // Direct key selection
-        KeyCode::Char('y') | KeyCode::Char('Y') => Some((true, crate::tool::PermissionScope::Once)),
-        KeyCode::Char('s') | KeyCode::Char('S') => {
-            Some((true, crate::tool::PermissionScope::Session))
-        }
-        KeyCode::Char('w') | KeyCode::Char('W') => {
-            Some((true, crate::tool::PermissionScope::Workspace))
-        }
-        KeyCode::Char('g') | KeyCode::Char('G') => {
-            Some((true, crate::tool::PermissionScope::Global))
-        }
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            Some((false, crate::tool::PermissionScope::Once))
-        }
-        // Enter key - use current selection
-        KeyCode::Enter => {
-            let selected = app
-                .dialog
-                .as_ref()
-                .map(|d| d.selected_permission_option)
-                .unwrap_or(0);
-            match selected {
-                0 => Some((true, crate::tool::PermissionScope::Once)),
-                1 => Some((true, crate::tool::PermissionScope::Session)),
-                2 => Some((true, crate::tool::PermissionScope::Workspace)),
-                3 => Some((true, crate::tool::PermissionScope::Global)),
-                4 => Some((false, crate::tool::PermissionScope::Once)), // Reject
-                _ => None,
-            }
-        }
+        KeyCode::Char('y' | 'Y') => Some((true, PermissionScope::Once)),
+        KeyCode::Char('s' | 'S') => Some((true, PermissionScope::Session)),
+        KeyCode::Char('w' | 'W') => Some((true, PermissionScope::Workspace)),
+        KeyCode::Char('g' | 'G') => Some((true, PermissionScope::Global)),
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some((false, PermissionScope::Once)),
+        KeyCode::Enter => permission_option_to_response(dialog.selected_permission_option),
         _ => None,
     };
 
@@ -711,87 +652,73 @@ async fn handle_permission_input(
     Ok(())
 }
 
+/// Handle custom answer editing in question dialog
+fn handle_custom_answer_edit(dialog: &mut DialogState, key_code: KeyCode) {
+    let current_q_idx = dialog.current_question_index;
+    match key_code {
+        KeyCode::Esc => {
+            dialog.is_editing_custom = false;
+            dialog.custom_answer_input.clear();
+        }
+        KeyCode::Enter => {
+            let custom_answer = dialog.custom_answer_input.trim().to_string();
+            if !custom_answer.is_empty() {
+                dialog.question_answers[current_q_idx].push(custom_answer);
+            }
+            dialog.is_editing_custom = false;
+            dialog.custom_answer_input.clear();
+        }
+        KeyCode::Char(c) => dialog.custom_answer_input.push(c),
+        KeyCode::Backspace => {
+            dialog.custom_answer_input.pop();
+        }
+        _ => {}
+    }
+}
+
 /// Handle input for question dialog
 async fn handle_question_input(
     app: &mut App,
     key_code: KeyCode,
     event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
-    let dialog = match &mut app.dialog {
-        Some(d) => d,
-        None => return Ok(()),
+    let Some(dialog) = &mut app.dialog else {
+        return Ok(());
+    };
+    let Some(question_request) = dialog.question_request.clone() else {
+        return Ok(());
     };
 
-    let question_request = match &dialog.question_request {
-        Some(req) => req.clone(),
-        None => return Ok(()),
-    };
+    // Handle custom answer editing mode separately
+    if dialog.is_editing_custom {
+        handle_custom_answer_edit(dialog, key_code);
+        return Ok(());
+    }
 
     let question_count = question_request.questions.len();
     let current_q_idx = dialog.current_question_index;
     let current_question = &question_request.questions[current_q_idx];
+    let max_options = current_question.options.len() + usize::from(current_question.custom);
 
-    // Handle custom answer editing mode
-    if dialog.is_editing_custom {
-        match key_code {
-            KeyCode::Esc => {
-                dialog.is_editing_custom = false;
-                dialog.custom_answer_input.clear();
-            }
-            KeyCode::Enter => {
-                // Add custom answer
-                let custom_answer = dialog.custom_answer_input.trim().to_string();
-                if !custom_answer.is_empty() {
-                    dialog.question_answers[current_q_idx].push(custom_answer);
-                }
-                dialog.is_editing_custom = false;
-                dialog.custom_answer_input.clear();
-            }
-            KeyCode::Char(c) => {
-                dialog.custom_answer_input.push(c);
-            }
-            KeyCode::Backspace => {
-                dialog.custom_answer_input.pop();
-            }
-            _ => {}
-        }
-        return Ok(());
-    }
-
-    // Normal navigation mode
     match key_code {
-        KeyCode::Esc => {
-            // Cancel the question
-            app.close_dialog();
-        }
+        KeyCode::Esc => app.close_dialog(),
         KeyCode::Up | KeyCode::Char('k') => {
-            if dialog.current_option_index > 0 {
-                dialog.current_option_index -= 1;
-            }
+            dialog.current_option_index = dialog.current_option_index.saturating_sub(1);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            let max_options =
-                current_question.options.len() + if current_question.custom { 1 } else { 0 };
             if dialog.current_option_index + 1 < max_options {
                 dialog.current_option_index += 1;
             }
         }
-        KeyCode::Tab => {
-            // Next question
-            if current_q_idx + 1 < question_count {
-                dialog.current_question_index += 1;
-                dialog.current_option_index = 0;
-            }
+        KeyCode::Tab if current_q_idx + 1 < question_count => {
+            dialog.current_question_index += 1;
+            dialog.current_option_index = 0;
         }
-        KeyCode::BackTab => {
-            // Previous question
-            if current_q_idx > 0 {
-                dialog.current_question_index -= 1;
-                dialog.current_option_index = 0;
-            }
+        KeyCode::BackTab if current_q_idx > 0 => {
+            dialog.current_question_index -= 1;
+            dialog.current_option_index = 0;
         }
         KeyCode::Char(c) if c.is_ascii_digit() => {
-            // Number selection (1-9)
             if let Some(digit) = c.to_digit(10) {
                 let option_idx = (digit as usize).saturating_sub(1);
                 if option_idx < current_question.options.len() {
@@ -801,36 +728,27 @@ async fn handle_question_input(
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
             let opt_idx = dialog.current_option_index;
-
-            // Check if selecting custom answer
             if current_question.custom && opt_idx == current_question.options.len() {
                 dialog.is_editing_custom = true;
                 dialog.custom_answer_input.clear();
             } else if opt_idx < current_question.options.len() {
-                // Toggle the selected option
                 toggle_answer(dialog, current_q_idx, opt_idx, current_question.multiple);
-
-                // For single-select on last question or single question, auto-submit
-                if !current_question.multiple
-                    && current_q_idx + 1 == question_count
-                    && question_count == 1
-                {
-                    // Single question, single select - submit immediately
-                    submit_answers(app, event_tx, &question_request).await?;
-                } else if !current_question.multiple && current_q_idx + 1 < question_count {
-                    // Multi-question, move to next
-                    dialog.current_question_index += 1;
-                    dialog.current_option_index = 0;
+                // Single-select: auto-advance or auto-submit
+                if !current_question.multiple {
+                    if question_count == 1 {
+                        submit_answers(app, event_tx, &question_request).await?;
+                    } else if current_q_idx + 1 < question_count {
+                        dialog.current_question_index += 1;
+                        dialog.current_option_index = 0;
+                    }
                 }
             }
         }
         KeyCode::Char('c') if current_question.custom => {
-            // Shortcut to enter custom answer
             dialog.is_editing_custom = true;
             dialog.custom_answer_input.clear();
         }
         KeyCode::Char('s') => {
-            // Submit answers
             submit_answers(app, event_tx, &question_request).await?;
         }
         _ => {}
@@ -889,7 +807,7 @@ async fn submit_answers(
 pub async fn handle_dialog_input(
     app: &mut App,
     key: crossterm::event::KeyEvent,
-    event_tx: mpsc::Sender<AppEvent>,
+    event_tx: &mpsc::Sender<AppEvent>,
 ) -> Result<()> {
     let Some(dialog) = &app.dialog else {
         return Ok(());
@@ -910,7 +828,7 @@ pub async fn handle_dialog_input(
             handle_rename_input(app, key.code).await?;
         }
         DialogType::AuthMethodSelector => {
-            handle_auth_method_input(app, key.code, &event_tx).await?;
+            handle_auth_method_input(app, key.code, event_tx).await?;
         }
         DialogType::OAuthDeviceCode | DialogType::OAuthWaiting => {
             if key.code == KeyCode::Esc {
@@ -918,15 +836,10 @@ pub async fn handle_dialog_input(
             }
         }
         DialogType::PermissionRequest => {
-            handle_permission_input(app, key.code, &event_tx).await?;
+            handle_permission_input(app, key.code, event_tx).await?;
         }
         DialogType::Question => {
-            handle_question_input(app, key.code, &event_tx).await?;
-        }
-        DialogType::None => {
-            if key.code == KeyCode::Esc {
-                app.close_dialog();
-            }
+            handle_question_input(app, key.code, event_tx).await?;
         }
     }
 

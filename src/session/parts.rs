@@ -4,7 +4,6 @@
 //! including text, tool calls, files, and other structured content.
 
 use crate::bus::{self, Event};
-use crate::id::{self, IdPrefix};
 use crate::storage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -42,56 +41,33 @@ pub enum Part {
     Patch(PatchPart),
 }
 
+/// Macro to access a base field from any Part variant
+macro_rules! part_base_field {
+    ($self:expr, $field:ident) => {
+        match $self {
+            Part::Text(p) => &p.base.$field,
+            Part::Reasoning(p) => &p.base.$field,
+            Part::File(p) => &p.base.$field,
+            Part::Tool(p) => &p.base.$field,
+            Part::StepStart(p) => &p.base.$field,
+            Part::StepFinish(p) => &p.base.$field,
+            Part::Subtask(p) => &p.base.$field,
+            Part::Compaction(p) => &p.base.$field,
+            Part::Retry(p) => &p.base.$field,
+            Part::Agent(p) => &p.base.$field,
+            Part::Snapshot(p) => &p.base.$field,
+            Part::Patch(p) => &p.base.$field,
+        }
+    };
+}
+
 impl Part {
     pub fn id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.id,
-            Part::Reasoning(p) => &p.base.id,
-            Part::File(p) => &p.base.id,
-            Part::Tool(p) => &p.base.id,
-            Part::StepStart(p) => &p.base.id,
-            Part::StepFinish(p) => &p.base.id,
-            Part::Subtask(p) => &p.base.id,
-            Part::Compaction(p) => &p.base.id,
-            Part::Retry(p) => &p.base.id,
-            Part::Agent(p) => &p.base.id,
-            Part::Snapshot(p) => &p.base.id,
-            Part::Patch(p) => &p.base.id,
-        }
+        part_base_field!(self, id)
     }
 
     pub fn message_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.message_id,
-            Part::Reasoning(p) => &p.base.message_id,
-            Part::File(p) => &p.base.message_id,
-            Part::Tool(p) => &p.base.message_id,
-            Part::StepStart(p) => &p.base.message_id,
-            Part::StepFinish(p) => &p.base.message_id,
-            Part::Subtask(p) => &p.base.message_id,
-            Part::Compaction(p) => &p.base.message_id,
-            Part::Retry(p) => &p.base.message_id,
-            Part::Agent(p) => &p.base.message_id,
-            Part::Snapshot(p) => &p.base.message_id,
-            Part::Patch(p) => &p.base.message_id,
-        }
-    }
-
-    pub fn session_id(&self) -> &str {
-        match self {
-            Part::Text(p) => &p.base.session_id,
-            Part::Reasoning(p) => &p.base.session_id,
-            Part::File(p) => &p.base.session_id,
-            Part::Tool(p) => &p.base.session_id,
-            Part::StepStart(p) => &p.base.session_id,
-            Part::StepFinish(p) => &p.base.session_id,
-            Part::Subtask(p) => &p.base.session_id,
-            Part::Compaction(p) => &p.base.session_id,
-            Part::Retry(p) => &p.base.session_id,
-            Part::Agent(p) => &p.base.session_id,
-            Part::Snapshot(p) => &p.base.session_id,
-            Part::Patch(p) => &p.base.session_id,
-        }
+        part_base_field!(self, message_id)
     }
 
     /// List all parts for a message
@@ -121,35 +97,9 @@ impl Part {
             .await
             .context("Failed to save part")?;
 
-        bus::publish(PartUpdated { part: self.clone() }).await;
+        bus::publish(PartUpdated {}).await;
 
         Ok(())
-    }
-
-    /// Create a new text part
-    pub fn text(session_id: &str, message_id: &str, text: String) -> Self {
-        Part::Text(TextPart {
-            base: PartBase::new(session_id, message_id),
-            text,
-            synthetic: None,
-            ignored: None,
-            time: None,
-            metadata: None,
-        })
-    }
-
-    /// Create a new tool part
-    pub fn tool(session_id: &str, message_id: &str, tool: String, call_id: String) -> Self {
-        Part::Tool(ToolPart {
-            base: PartBase::new(session_id, message_id),
-            tool,
-            call_id,
-            state: ToolState::Pending(ToolStatePending {
-                input: serde_json::Value::Null,
-                raw: String::new(),
-            }),
-            metadata: None,
-        })
     }
 }
 
@@ -159,16 +109,6 @@ pub struct PartBase {
     pub id: String,
     pub session_id: String,
     pub message_id: String,
-}
-
-impl PartBase {
-    pub fn new(session_id: &str, message_id: &str) -> Self {
-        Self {
-            id: id::ascending(IdPrefix::Part),
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -389,70 +329,45 @@ pub struct PartTime {
 
 /// Part events
 #[derive(Debug, Clone)]
-pub struct PartUpdated {
-    pub part: Part,
-}
+pub struct PartUpdated {}
 impl Event for PartUpdated {}
-
-#[derive(Debug, Clone)]
-pub struct PartRemoved {
-    pub session_id: String,
-    pub message_id: String,
-    pub part_id: String,
-}
-impl Event for PartRemoved {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::id::{self, IdPrefix};
 
     mod part {
         use super::*;
 
         #[test]
-        fn test_text_part_creation() {
-            let part = Part::text("session_123", "msg_456", "Hello world".to_string());
-
-            match part {
-                Part::Text(text_part) => {
-                    assert!(text_part.base.id.starts_with("prt_"));
-                    assert_eq!(text_part.base.session_id, "session_123");
-                    assert_eq!(text_part.base.message_id, "msg_456");
-                    assert_eq!(text_part.text, "Hello world");
-                }
-                _ => panic!("Expected Text part"),
-            }
-        }
-
-        #[test]
-        fn test_tool_part_creation() {
-            let part = Part::tool(
-                "session_123",
-                "msg_456",
-                "bash".to_string(),
-                "call_789".to_string(),
-            );
-
-            match part {
-                Part::Tool(tool_part) => {
-                    assert!(tool_part.base.id.starts_with("prt_"));
-                    assert_eq!(tool_part.tool, "bash");
-                    assert_eq!(tool_part.call_id, "call_789");
-                    assert!(matches!(tool_part.state, ToolState::Pending(_)));
-                }
-                _ => panic!("Expected Tool part"),
-            }
-        }
-
-        #[test]
         fn test_part_id() {
-            let text_part = Part::text("session_123", "msg_456", "Hello".to_string());
-            let tool_part = Part::tool(
-                "session_123",
-                "msg_456",
-                "bash".to_string(),
-                "call_789".to_string(),
-            );
+            let text_part = Part::Text(TextPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                text: "Hello".to_string(),
+                synthetic: None,
+                ignored: None,
+                time: None,
+                metadata: None,
+            });
+            let tool_part = Part::Tool(ToolPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                tool: "bash".to_string(),
+                call_id: "call_789".to_string(),
+                state: ToolState::Pending(ToolStatePending {
+                    input: serde_json::Value::Null,
+                    raw: String::new(),
+                }),
+                metadata: None,
+            });
 
             assert!(text_part.id().starts_with("prt_"));
             assert!(tool_part.id().starts_with("prt_"));
@@ -460,14 +375,19 @@ mod tests {
 
         #[test]
         fn test_part_message_id() {
-            let part = Part::text("session_123", "msg_456", "Hello".to_string());
+            let part = Part::Text(TextPart {
+                base: PartBase {
+                    id: id::ascending(IdPrefix::Part),
+                    session_id: "session_123".to_string(),
+                    message_id: "msg_456".to_string(),
+                },
+                text: "Hello".to_string(),
+                synthetic: None,
+                ignored: None,
+                time: None,
+                metadata: None,
+            });
             assert_eq!(part.message_id(), "msg_456");
-        }
-
-        #[test]
-        fn test_part_session_id() {
-            let part = Part::text("session_123", "msg_456", "Hello".to_string());
-            assert_eq!(part.session_id(), "session_123");
         }
     }
 

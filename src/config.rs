@@ -354,33 +354,26 @@ impl Config {
 
     /// Find project config file in current directory or parent directories
     async fn find_project_config() -> Result<Option<PathBuf>> {
+        const CONFIG_FILES: &[&str] = &["opencode.jsonc", "opencode.json"];
+
         let mut current = std::env::current_dir()?;
 
         loop {
-            // Check for opencode.jsonc first, then opencode.json
-            for filename in &["opencode.jsonc", "opencode.json"] {
-                let config_path = current.join(filename);
-                if config_path.exists() {
-                    return Ok(Some(config_path));
-                }
-            }
+            // Check directories: current dir, then .opencode subdir
+            let dirs_to_check = [current.clone(), current.join(".opencode")];
 
-            // Also check .opencode directory
-            let opencode_dir = current.join(".opencode");
-            if opencode_dir.exists() {
-                for filename in &["opencode.jsonc", "opencode.json"] {
-                    let config_path = opencode_dir.join(filename);
+            for dir in &dirs_to_check {
+                for filename in CONFIG_FILES {
+                    let config_path = dir.join(filename);
                     if config_path.exists() {
                         return Ok(Some(config_path));
                     }
                 }
             }
 
-            // Move to parent directory
-            if let Some(parent) = current.parent() {
-                current = parent.to_path_buf();
-            } else {
-                break;
+            match current.parent() {
+                Some(parent) => current = parent.to_path_buf(),
+                None => break,
             }
         }
 
@@ -501,75 +494,63 @@ impl Config {
 
     /// Merge another config into this one (other takes precedence)
     pub fn merge(mut self, other: Config) -> Self {
-        // Helper to merge Option fields (other takes precedence)
-        fn merge_option<T>(target: &mut Option<T>, source: Option<T>) {
-            if source.is_some() {
-                *target = source;
-            }
+        // Macro for merging Option fields (other takes precedence)
+        macro_rules! merge_opt {
+            ($($field:ident),+ $(,)?) => {
+                $(if other.$field.is_some() { self.$field = other.$field; })+
+            };
         }
 
-        // Helper to merge HashMap fields
-        fn merge_map<K: Eq + std::hash::Hash, V>(
-            target: &mut Option<HashMap<K, V>>,
-            source: Option<HashMap<K, V>>,
-        ) {
-            if let Some(source_map) = source {
-                target.get_or_insert_with(HashMap::new).extend(source_map);
-            }
+        // Macro for merging HashMap fields (extends existing)
+        macro_rules! merge_map {
+            ($($field:ident),+ $(,)?) => {
+                $(if let Some(map) = other.$field {
+                    self.$field.get_or_insert_with(HashMap::new).extend(map);
+                })+
+            };
         }
 
-        // Merge simple Option fields
-        merge_option(&mut self.schema, other.schema);
-        merge_option(&mut self.theme, other.theme);
-        merge_option(&mut self.model, other.model);
-        merge_option(&mut self.small_model, other.small_model);
-        merge_option(&mut self.default_agent, other.default_agent);
-        merge_option(&mut self.username, other.username);
-        merge_option(&mut self.log_level, other.log_level);
-        merge_option(&mut self.disabled_providers, other.disabled_providers);
-        merge_option(&mut self.enabled_providers, other.enabled_providers);
-        merge_option(&mut self.share, other.share);
-        merge_option(&mut self.autoupdate, other.autoupdate);
-        merge_option(&mut self.keybinds, other.keybinds);
-        merge_option(&mut self.tui, other.tui);
-        merge_option(&mut self.server, other.server);
-        merge_option(&mut self.compaction, other.compaction);
-        merge_option(&mut self.instructions, other.instructions);
-        merge_option(&mut self.plugin, other.plugin);
-        merge_option(&mut self.experimental, other.experimental);
+        merge_opt!(
+            schema,
+            theme,
+            model,
+            small_model,
+            default_agent,
+            username,
+            log_level,
+            disabled_providers,
+            enabled_providers,
+            share,
+            autoupdate,
+            keybinds,
+            tui,
+            server,
+            compaction,
+            instructions,
+            plugin,
+            experimental,
+        );
 
-        // Merge HashMap fields
-        merge_map(&mut self.provider, other.provider);
-        merge_map(&mut self.mcp, other.mcp);
-        merge_map(&mut self.agent, other.agent);
-        merge_map(&mut self.command, other.command);
-        merge_map(&mut self.permission, other.permission);
-        merge_map(&mut self.tools, other.tools);
+        merge_map!(provider, mcp, agent, command, permission, tools);
 
         self
     }
 
     /// Apply environment variable overrides
     fn apply_env_overrides(mut self) -> Self {
-        if let Ok(model) = std::env::var("OPENCODE_MODEL") {
-            self.model = Some(model);
+        macro_rules! env_override {
+            ($($field:ident => $env:literal),+ $(,)?) => {
+                $(if let Ok(val) = std::env::var($env) { self.$field = Some(val); })+
+            };
         }
-        if let Ok(theme) = std::env::var("OPENCODE_THEME") {
-            self.theme = Some(theme);
-        }
-        if let Ok(log_level) = std::env::var("OPENCODE_LOG_LEVEL") {
-            self.log_level = Some(log_level);
-        }
-        self
-    }
 
-    /// Get the effective username
-    pub fn get_username(&self) -> String {
-        self.username
-            .clone()
-            .or_else(|| std::env::var("USER").ok())
-            .or_else(|| std::env::var("USERNAME").ok())
-            .unwrap_or_else(|| "user".to_string())
+        env_override!(
+            model => "OPENCODE_MODEL",
+            theme => "OPENCODE_THEME",
+            log_level => "OPENCODE_LOG_LEVEL",
+        );
+
+        self
     }
 
     /// Create a default config file if it doesn't exist
@@ -577,64 +558,19 @@ impl Config {
         let config_dir = Self::global_config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
 
-        // Create config directory if it doesn't exist
         fs::create_dir_all(&config_dir)
             .await
             .context("Failed to create config directory")?;
 
         let config_path = config_dir.join("opencode.json");
 
-        // Use try_exists() to properly handle symlinks (e.g., in NixOS)
-        // This checks if the symlink itself exists, not just its target
-        let should_create = match config_path.try_exists() {
-            Ok(exists) => !exists,
-            Err(_) => {
-                // If we can't determine existence (permissions issue, etc.),
-                // check if symlink metadata exists to avoid overwriting symlinks
-                fs::symlink_metadata(&config_path).await.is_err()
-            }
-        };
+        // Check if file exists, handling symlinks properly (e.g., NixOS)
+        let exists = config_path
+            .try_exists()
+            .unwrap_or_else(|_| std::fs::symlink_metadata(&config_path).is_ok());
 
-        if should_create {
-            // Create default config
-            let default_config = Config {
-                schema: Some("https://opencode.ai/schema/config.json".to_string()),
-                theme: Some("dark".to_string()),
-                model: None, // User needs to configure this
-                small_model: None,
-                default_agent: None,
-                username: None,
-                log_level: Some("info".to_string()),
-                disabled_providers: None,
-                enabled_providers: None,
-                share: Some(ShareMode::Disabled),
-                autoupdate: Some(AutoUpdate::Notify("notify".to_string())),
-                provider: Some(HashMap::new()),
-                mcp: None,
-                agent: None,
-                command: None,
-                permission: None,
-                keybinds: None,
-                tui: Some(TuiConfig {
-                    scroll_speed: Some(3.0),
-                    diff_style: Some(DiffStyle::Auto),
-                }),
-                server: Some(ServerConfig {
-                    port: Some(19876),
-                    hostname: Some("127.0.0.1".to_string()),
-                    mdns: Some(false),
-                    cors: None,
-                }),
-                compaction: Some(CompactionConfig {
-                    auto: Some(true),
-                    prune: Some(false),
-                }),
-                experimental: None,
-                instructions: None,
-                plugin: None,
-                tools: None,
-            };
-
+        if !exists {
+            let default_config = Self::default_init_config();
             let content = serde_json::to_string_pretty(&default_config)?;
             fs::write(&config_path, content)
                 .await
@@ -642,6 +578,33 @@ impl Config {
         }
 
         Ok(config_path)
+    }
+
+    /// Create a default configuration for initialization
+    fn default_init_config() -> Self {
+        Self {
+            schema: Some("https://opencode.ai/schema/config.json".to_string()),
+            theme: Some("dark".to_string()),
+            log_level: Some("info".to_string()),
+            share: Some(ShareMode::Disabled),
+            autoupdate: Some(AutoUpdate::Notify("notify".to_string())),
+            provider: Some(HashMap::new()),
+            tui: Some(TuiConfig {
+                scroll_speed: Some(3.0),
+                diff_style: Some(DiffStyle::Auto),
+            }),
+            server: Some(ServerConfig {
+                port: Some(19876),
+                hostname: Some("127.0.0.1".to_string()),
+                mdns: Some(false),
+                cors: None,
+            }),
+            compaction: Some(CompactionConfig {
+                auto: Some(true),
+                prune: Some(false),
+            }),
+            ..Default::default()
+        }
     }
 }
 

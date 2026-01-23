@@ -21,6 +21,5 @@ mod ui;
 
 pub use app::run;
 pub use clipboard::copy_to_clipboard;
-pub use state::App;
 pub use transcript::{format_transcript, TranscriptOptions};
 pub use types::*;

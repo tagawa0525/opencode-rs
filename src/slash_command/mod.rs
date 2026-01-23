@@ -1,7 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 pub mod builtin;
 pub mod loader;
@@ -12,12 +11,7 @@ pub mod template;
 
 /// Context provided to slash commands when executed
 #[derive(Debug, Clone)]
-pub struct CommandContext {
-    pub session_id: String,
-    pub cwd: String,
-    pub root: String,
-    pub extra: HashMap<String, serde_json::Value>,
-}
+pub struct CommandContext {}
 
 /// Special actions that commands can trigger
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -122,12 +116,6 @@ impl CommandOutput {
         }
     }
 
-    /// Add a system message
-    pub fn with_system(mut self, system: impl Into<String>) -> Self {
-        self.system = Some(system.into());
-        self
-    }
-
     /// Set the agent to use
     pub fn with_agent(mut self, agent: impl Into<String>) -> Self {
         self.agent = Some(agent.into());
@@ -162,11 +150,6 @@ pub trait SlashCommand: Send + Sync {
 
     /// Execute the command with the given arguments
     async fn execute(&self, args: &str, ctx: &CommandContext) -> Result<CommandOutput>;
-
-    /// Provide autocomplete suggestions for the given partial input
-    async fn complete(&self, _partial: &str) -> Vec<String> {
-        vec![]
-    }
 }
 
 /// Information about a slash command

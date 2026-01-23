@@ -3,9 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 /// Commands command - show all commands
-pub struct CommandsCommand {
-    registry: std::sync::Weak<crate::slash_command::registry::CommandRegistry>,
-}
+pub struct CommandsCommand;
 
 impl Default for CommandsCommand {
     fn default() -> Self {
@@ -15,15 +13,7 @@ impl Default for CommandsCommand {
 
 impl CommandsCommand {
     pub fn new() -> Self {
-        Self {
-            registry: std::sync::Weak::new(),
-        }
-    }
-
-    pub fn with_registry(
-        registry: std::sync::Weak<crate::slash_command::registry::CommandRegistry>,
-    ) -> Self {
-        Self { registry }
+        Self
     }
 }
 

@@ -5,10 +5,7 @@
 
 use super::*;
 use crate::id::{self, IdPrefix};
-use crate::session::{
-    Part, PartBase, ToolPart, ToolState, ToolStateCompleted, ToolStateError, ToolStateRunning,
-    ToolTimeComplete, ToolTimeStart,
-};
+use crate::session::{Part, PartBase, ToolPart, ToolState, ToolStateError, ToolTimeComplete};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -93,10 +90,6 @@ pub struct BatchTool;
 
 #[async_trait::async_trait]
 impl Tool for BatchTool {
-    fn id(&self) -> &str {
-        "batch"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "batch".to_string(),
@@ -230,10 +223,7 @@ impl Tool for BatchTool {
         }
 
         // Build summarized details to avoid payload size issues
-        let summarized_details: Vec<_> = all_results
-            .iter()
-            .map(|r| build_summarized_result(r))
-            .collect();
+        let summarized_details: Vec<_> = all_results.iter().map(build_summarized_result).collect();
 
         // Build metadata
         let mut metadata = HashMap::new();
@@ -379,8 +369,6 @@ async fn execute_single_call(
 
 /// Tool execution state for saving to storage
 enum ToolExecutionState<'a> {
-    Running,
-    Completed(&'a ToolResult),
     Error(&'a str),
 }
 
@@ -394,27 +382,6 @@ async fn save_tool_part(
     execution_state: ToolExecutionState<'_>,
 ) -> anyhow::Result<()> {
     let state = match execution_state {
-        ToolExecutionState::Running => ToolState::Running(ToolStateRunning {
-            input,
-            title: None,
-            metadata: None,
-            time: ToolTimeStart { start: start_time },
-        }),
-        ToolExecutionState::Completed(result) => {
-            let end_time = chrono::Utc::now().timestamp_millis();
-            ToolState::Completed(ToolStateCompleted {
-                input,
-                output: result.output.clone(),
-                title: result.title.clone(),
-                metadata: result.metadata.clone(),
-                time: ToolTimeComplete {
-                    start: start_time,
-                    end: end_time,
-                    compacted: None,
-                },
-                attachments: None, // TODO: Convert result.attachments to FilePart
-            })
-        }
         ToolExecutionState::Error(error) => {
             let end_time = chrono::Utc::now().timestamp_millis();
             ToolState::Error(ToolStateError {

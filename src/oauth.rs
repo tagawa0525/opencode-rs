@@ -7,8 +7,12 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// Shared HTTP client for all OAuth operations
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
 // ============================================================================
 // GitHub Copilot Device Code Flow
@@ -24,7 +28,6 @@ pub struct DeviceCodeResponse {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
-    pub expires_in: u64,
     pub interval: u64,
 }
 
@@ -32,16 +35,13 @@ pub struct DeviceCodeResponse {
 #[derive(Debug, Deserialize)]
 struct AccessTokenResponse {
     access_token: Option<String>,
-    token_type: Option<String>,
     error: Option<String>,
     error_description: Option<String>,
 }
 
 /// Request device code for GitHub Copilot
 pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
-    let client = Client::new();
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
@@ -72,13 +72,12 @@ pub async fn copilot_request_device_code() -> Result<DeviceCodeResponse> {
 
 /// Poll for access token after user authorizes
 pub async fn copilot_poll_for_token(device_code: &str, interval: u64) -> Result<String> {
-    let client = Client::new();
     let poll_interval = Duration::from_secs(interval.max(5));
 
     loop {
         sleep(poll_interval).await;
 
-        let response = client
+        let response = HTTP_CLIENT
             .post(GITHUB_ACCESS_TOKEN_URL)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
@@ -148,8 +147,6 @@ pub struct OpenAITokenResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_in: Option<u64>,
-    pub id_token: Option<String>,
-    pub token_type: String,
 }
 
 /// Alphanumeric charset for random string generation
@@ -222,9 +219,7 @@ pub async fn openai_exchange_code(
     redirect_uri: &str,
     pkce: &PkceCodes,
 ) -> Result<OpenAITokenResponse> {
-    let client = Client::new();
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(format!("{}/oauth/token", OPENAI_ISSUER))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
@@ -244,38 +239,6 @@ pub async fn openai_exchange_code(
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         anyhow::bail!("Token exchange failed: {}", error);
-    }
-
-    let tokens: OpenAITokenResponse = response
-        .json()
-        .await
-        .context("Failed to parse token response")?;
-
-    Ok(tokens)
-}
-
-/// Refresh OpenAI access token
-pub async fn openai_refresh_token(refresh_token: &str) -> Result<OpenAITokenResponse> {
-    let client = Client::new();
-
-    let response = client
-        .post(format!("{}/oauth/token", OPENAI_ISSUER))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type=refresh_token&refresh_token={}&client_id={}",
-            urlencoding::encode(refresh_token),
-            OPENAI_CLIENT_ID
-        ))
-        .send()
-        .await
-        .context("Failed to refresh token")?;
-
-    if !response.status().is_success() {
-        let error = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        anyhow::bail!("Token refresh failed: {}", error);
     }
 
     let tokens: OpenAITokenResponse = response

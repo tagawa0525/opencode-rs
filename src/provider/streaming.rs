@@ -8,21 +8,31 @@ use futures::StreamExt;
 use reqwest::{Client, Response};
 use tokio::sync::mpsc;
 
-// Re-export types from stream_types for convenience
 pub use super::parsers::{AnthropicParser, OpenAIParser};
 pub use super::stream_types::*;
 
-/// Parameters for OpenAI-compatible API streaming
-pub struct OpenAIStreamParams {
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
+/// Request parameters for OpenAI-compatible API calls
+#[derive(Debug, Clone)]
+pub struct OpenAIRequest {
     pub messages: Vec<ChatMessage>,
     pub system: Option<String>,
     pub tools: Vec<ToolDefinition>,
     pub max_tokens: u64,
-    pub request_modifier:
-        Option<Box<dyn FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder + Send>>,
+}
+
+type RequestModifier =
+    Option<Box<dyn FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder + Send>>;
+
+/// Internal parameters for OpenAI-compatible streaming
+struct OpenAIParams {
+    api_key: String,
+    base_url: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+    system: Option<String>,
+    tools: Vec<ToolDefinition>,
+    max_tokens: u64,
+    request_modifier: RequestModifier,
 }
 
 /// Parser trait for SSE streams
@@ -37,7 +47,7 @@ impl SseParser for AnthropicParser {
     }
 
     fn event_delimiter(&self) -> &str {
-        "\n\n" // Anthropic uses double newline for event separation
+        "\n\n"
     }
 }
 
@@ -47,21 +57,32 @@ impl SseParser for OpenAIParser {
     }
 
     fn event_delimiter(&self) -> &str {
-        "\n" // OpenAI uses single newline
+        "\n"
     }
 }
 
 /// Maximum request size limit (5MB)
 const MAX_REQUEST_SIZE: usize = 5 * 1024 * 1024;
 
-/// Count tool_use parts in the last message of a request body
-fn count_tool_calls_in_request(request_body: &serde_json::Value) -> usize {
-    request_body
-        .get("messages")
+/// Check request size and return error message if too large
+fn check_request_size(request_body: &serde_json::Value) -> Option<String> {
+    let request_str = serde_json::to_string(request_body).ok()?;
+    let size = request_str.len();
+
+    if size <= MAX_REQUEST_SIZE {
+        return None;
+    }
+
+    let tool_count = count_tool_calls(request_body);
+    Some(build_size_error(size, tool_count))
+}
+
+fn count_tool_calls(body: &serde_json::Value) -> usize {
+    body.get("messages")
         .and_then(|m| m.as_array())
         .and_then(|msgs| msgs.last())
         .and_then(|msg| msg.get("content"))
-        .and_then(|content| content.as_array())
+        .and_then(|c| c.as_array())
         .map(|parts| {
             parts
                 .iter()
@@ -71,26 +92,37 @@ fn count_tool_calls_in_request(request_body: &serde_json::Value) -> usize {
         .unwrap_or(0)
 }
 
-/// Build error message for oversized request payload
-fn build_payload_too_large_error(request_size: usize, tool_call_count: usize) -> String {
-    if tool_call_count > 10 {
+fn build_size_error(size: usize, tool_count: usize) -> String {
+    let base = format!(
+        "Request payload too large: {} bytes (max: {} bytes).",
+        size, MAX_REQUEST_SIZE
+    );
+
+    if tool_count > 10 {
         format!(
-            "Request payload too large: {} bytes (max: {} bytes). \
-            You are trying to make {} tool calls at once. \
-            \n\nIMPORTANT: Use the 'batch' tool instead! \
-            \n\nExample: \
-            \n{{\n  \"tool\": \"batch\",\n  \"parameters\": {{\n    \"tool_calls\": [\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}},\n      {{\"tool\": \"webfetch\", \"parameters\": {{...}}}}\n    ]\n  }}\n}} \
-            \n\nThe batch tool automatically handles large numbers of tool calls efficiently.",
-            request_size, MAX_REQUEST_SIZE, tool_call_count
+            "{} You are trying to make {} tool calls at once.\n\n\
+            IMPORTANT: Use the 'batch' tool instead!\n\n\
+            Example:\n{{\n  \"tool\": \"batch\",\n  \"parameters\": {{\n    \"tool_calls\": [\n      \
+            {{\"tool\": \"webfetch\", \"parameters\": {{...}}}},\n      \
+            {{\"tool\": \"webfetch\", \"parameters\": {{...}}}}\n    ]\n  }}\n}}\n\n\
+            The batch tool automatically handles large numbers of tool calls efficiently.",
+            base, tool_count
         )
     } else {
         format!(
-            "Request payload too large: {} bytes (max: {} bytes). \
-            This usually happens when trying to make too many tool calls at once. \
-            Please use the 'batch' tool to execute multiple tools efficiently, or break down your request into smaller steps.",
-            request_size, MAX_REQUEST_SIZE
+            "{} This usually happens when trying to make too many tool calls at once. \
+            Please use the 'batch' tool to execute multiple tools efficiently, \
+            or break down your request into smaller steps.",
+            base
         )
     }
+}
+
+/// Send error through channel asynchronously
+fn spawn_error(tx: mpsc::Sender<StreamEvent>, error: String) {
+    tokio::spawn(async move {
+        let _ = tx.send(StreamEvent::Error(error)).await;
+    });
 }
 
 /// Streaming client for LLM APIs
@@ -140,6 +172,33 @@ impl StreamingClient {
         }
     }
 
+    /// Handle HTTP response with optional error customization
+    async fn handle_response<P: SseParser>(
+        result: Result<Response, reqwest::Error>,
+        tx: mpsc::Sender<StreamEvent>,
+        parser: P,
+        error_handler: Option<fn(u16, &str) -> String>,
+    ) {
+        match result {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    let status = response.status().as_u16();
+                    let text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    let error = error_handler.map_or(text.clone(), |h| h(status, &text));
+                    let _ = tx.send(StreamEvent::Error(error)).await;
+                    return;
+                }
+                Self::process_sse_stream(response, tx, parser).await;
+            }
+            Err(e) => {
+                let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+            }
+        }
+    }
+
     /// Stream from Anthropic API
     pub async fn stream_anthropic(
         &self,
@@ -157,27 +216,16 @@ impl StreamingClient {
             "max_tokens": max_tokens,
             "messages": messages,
             "system": system,
-            "tools": tools.iter().map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })
-            }).collect::<Vec<_>>(),
+            "tools": tools.iter().map(|t| serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            })).collect::<Vec<_>>(),
             "stream": true,
         });
 
-        // Check request body size
-        let request_body_str = serde_json::to_string(&request_body)?;
-        let request_size = request_body_str.len();
-
-        if request_size > MAX_REQUEST_SIZE {
-            let tool_call_count = count_tool_calls_in_request(&request_body);
-            let error_msg = build_payload_too_large_error(request_size, tool_call_count);
-            let tx_clone = tx.clone();
-            tokio::spawn(async move {
-                let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
-            });
+        if let Some(error) = check_request_size(&request_body) {
+            spawn_error(tx, error);
             return Ok(rx);
         }
 
@@ -198,51 +246,31 @@ impl StreamingClient {
                 .send()
                 .await;
 
-            match result {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        let error = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Unknown error".to_string());
-                        let _ = tx.send(StreamEvent::Error(error)).await;
-                        return;
-                    }
-
-                    Self::process_sse_stream(response, tx, AnthropicParser::new()).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
-                }
-            }
+            Self::handle_response(result, tx, AnthropicParser::new(), None).await;
         });
 
         Ok(rx)
     }
 
     /// Stream from OpenAI-compatible API
-    #[allow(clippy::too_many_arguments)]
     pub async fn stream_openai(
         &self,
         api_key: &str,
         base_url: &str,
         model: &str,
-        messages: Vec<ChatMessage>,
-        system: Option<String>,
-        tools: Vec<ToolDefinition>,
-        max_tokens: u64,
+        request: OpenAIRequest,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
-        let params = OpenAIStreamParams {
+        self.stream_openai_impl(OpenAIParams {
             api_key: api_key.to_string(),
             base_url: base_url.to_string(),
             model: model.to_string(),
-            messages,
-            system,
-            tools,
-            max_tokens,
+            messages: request.messages,
+            system: request.system,
+            tools: request.tools,
+            max_tokens: request.max_tokens,
             request_modifier: None,
-        };
-        self.stream_openai_impl(params).await
+        })
+        .await
     }
 
     /// Stream from GitHub Copilot API (OpenAI-compatible)
@@ -255,7 +283,7 @@ impl StreamingClient {
         tools: Vec<ToolDefinition>,
         max_tokens: u64,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
-        let params = OpenAIStreamParams {
+        self.stream_openai_impl(OpenAIParams {
             api_key: token.to_string(),
             base_url: "https://api.githubcopilot.com".to_string(),
             model: model.to_string(),
@@ -263,19 +291,18 @@ impl StreamingClient {
             system,
             tools,
             max_tokens,
-            request_modifier: Some(Box::new(|builder| {
-                builder
-                    .header("editor-version", "opencode/0.1.0")
+            request_modifier: Some(Box::new(|b| {
+                b.header("editor-version", "opencode/0.1.0")
                     .header("copilot-integration-id", "vscode-chat")
             })),
-        };
-        self.stream_openai_impl(params).await
+        })
+        .await
     }
 
     /// Generic OpenAI-compatible streaming implementation
     async fn stream_openai_impl(
         &self,
-        params: OpenAIStreamParams,
+        params: OpenAIParams,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
         let (tx, rx) = mpsc::channel(100);
 
@@ -295,7 +322,8 @@ impl StreamingClient {
             .collect();
 
         let openai_messages =
-            convert_messages_to_openai_with_system(params.messages, params.system.clone());
+            convert_messages_to_openai_with_system(params.messages, params.system);
+        let is_copilot = params.base_url.contains("githubcopilot.com");
 
         let mut request_body = serde_json::json!({
             "model": params.model,
@@ -305,94 +333,56 @@ impl StreamingClient {
             "stream": true,
         });
 
-        // Add stream_options for OpenAI (not Copilot)
-        if !params.base_url.contains("githubcopilot.com") {
+        if !is_copilot {
             request_body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
-        // Check request body size
-        let request_body_str = match serde_json::to_string(&request_body) {
-            Ok(s) => s,
-            Err(e) => {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    let _ = tx_clone
-                        .send(StreamEvent::Error(format!(
-                            "Failed to serialize request: {}",
-                            e
-                        )))
-                        .await;
-                });
-                return Ok(rx);
-            }
-        };
-        let request_size = request_body_str.len();
-
-        if request_size > MAX_REQUEST_SIZE {
-            let tool_call_count = count_tool_calls_in_request(&request_body);
-            let error_msg = build_payload_too_large_error(request_size, tool_call_count);
-            let tx_clone = tx.clone();
-            tokio::spawn(async move {
-                let _ = tx_clone.send(StreamEvent::Error(error_msg)).await;
-            });
+        if let Some(error) = check_request_size(&request_body) {
+            spawn_error(tx, error);
             return Ok(rx);
         }
 
         let client = self.client.clone();
-        let api_key = params.api_key;
-        let base_url = params.base_url;
-        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-        let is_copilot = base_url.contains("githubcopilot.com");
-        let request_modifier = params.request_modifier;
+        let url = format!("{}/chat/completions", params.base_url.trim_end_matches('/'));
 
         tokio::spawn(async move {
             let mut builder = client
                 .post(&url)
-                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Authorization", format!("Bearer {}", params.api_key))
                 .header("content-type", "application/json")
                 .json(&request_body);
 
-            if let Some(modifier) = request_modifier {
+            if let Some(modifier) = params.request_modifier {
                 builder = modifier(builder);
             }
 
-            let result = builder.send().await;
+            let error_handler: Option<fn(u16, &str) -> String> = if is_copilot {
+                Some(copilot_error_handler)
+            } else {
+                None
+            };
 
-            match result {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        let status = response.status();
-                        let error_text = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Unknown error".to_string());
-
-                        let error = if is_copilot {
-                            // Enhanced error messages for GitHub Copilot
-                            if error_text.contains("The requested model is not supported") {
-                                format!("{}\n\nMake sure the model is enabled in your copilot settings: https://github.com/settings/copilot/features", error_text)
-                            } else if status == 403 {
-                                "Please reauthenticate with the copilot provider to ensure your credentials work properly with opencode-rs.".to_string()
-                            } else {
-                                error_text
-                            }
-                        } else {
-                            error_text
-                        };
-
-                        let _ = tx.send(StreamEvent::Error(error)).await;
-                        return;
-                    }
-
-                    Self::process_sse_stream(response, tx, OpenAIParser::new()).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
-                }
-            }
+            Self::handle_response(builder.send().await, tx, OpenAIParser::new(), error_handler)
+                .await;
         });
 
         Ok(rx)
+    }
+}
+
+fn copilot_error_handler(status: u16, text: &str) -> String {
+    if text.contains("The requested model is not supported") {
+        format!(
+            "{}\n\nMake sure the model is enabled in your copilot settings: \
+            https://github.com/settings/copilot/features",
+            text
+        )
+    } else if status == 403 {
+        "Please reauthenticate with the copilot provider to ensure your credentials \
+        work properly with opencode-rs."
+            .to_string()
+    } else {
+        text.to_string()
     }
 }
 

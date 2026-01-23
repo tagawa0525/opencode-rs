@@ -14,6 +14,10 @@ use ratatui::{
 use super::theme::Theme;
 use super::types::{DialogState, DialogType};
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
 /// Calculate centered dialog area
 fn calculate_dialog_area(area: Rect) -> Rect {
     let width = area.width.clamp(40, 60);
@@ -23,14 +27,66 @@ fn calculate_dialog_area(area: Rect) -> Rect {
     Rect::new(x, y, width, height)
 }
 
+/// Render a help text at the bottom of a dialog
+fn render_help_text(frame: &mut Frame, theme: &Theme, area: Rect, text: &str) {
+    let help = Paragraph::new(text)
+        .style(theme.text_dim())
+        .alignment(Alignment::Center);
+    frame.render_widget(help, area);
+}
+
+/// Render an optional message
+fn render_message(frame: &mut Frame, theme: &Theme, area: Rect, message: Option<&str>, wrap: bool) {
+    if let Some(msg) = message {
+        let mut paragraph = Paragraph::new(msg).style(theme.text());
+        if wrap {
+            paragraph = paragraph.wrap(Wrap { trim: true });
+        }
+        frame.render_widget(paragraph, area);
+    }
+}
+
+/// Create a bordered input block with title
+fn create_input_block(theme: &Theme, title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(format!(" {} ", title))
+}
+
+/// Create selection style based on whether item is selected
+fn selection_style(theme: &Theme, is_selected: bool) -> Style {
+    if is_selected {
+        Style::default()
+            .fg(theme.background)
+            .bg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        theme.text()
+    }
+}
+
+/// Standard input dialog layout constraints
+fn input_dialog_constraints() -> [Constraint; 5] {
+    [
+        Constraint::Length(2), // Message
+        Constraint::Length(1), // Spacer
+        Constraint::Length(3), // Input
+        Constraint::Min(1),    // Spacer
+        Constraint::Length(1), // Help
+    ]
+}
+
+// ============================================================================
+// Main Dialog Renderer
+// ============================================================================
+
 /// Render a dialog overlay
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
     let dialog_area = calculate_dialog_area(area);
 
-    // Clear the area behind the dialog
     frame.render_widget(Clear, dialog_area);
 
-    // Draw dialog border
     let block = Block::default()
         .title(format!(" {} ", dialog.title))
         .borders(Borders::ALL)
@@ -46,32 +102,21 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, are
         | DialogType::AuthMethodSelector
         | DialogType::SessionList
         | DialogType::Timeline
-        | DialogType::AgentSelector => {
-            render_select_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::ApiKeyInput => {
-            render_input_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::SessionRename => {
-            render_rename_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::OAuthDeviceCode => {
-            render_device_code_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::OAuthWaiting => {
-            render_waiting_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::PermissionRequest => {
-            render_permission_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::Question => {
-            render_question_dialog(frame, dialog, theme, inner);
-        }
-        DialogType::None => {}
+        | DialogType::AgentSelector => render_select_dialog(frame, dialog, theme, inner),
+        DialogType::ApiKeyInput => render_input_dialog(frame, dialog, theme, inner, true),
+        DialogType::SessionRename => render_input_dialog(frame, dialog, theme, inner, false),
+        DialogType::OAuthDeviceCode => render_device_code_dialog(frame, dialog, theme, inner),
+        DialogType::OAuthWaiting => render_waiting_dialog(frame, dialog, theme, inner),
+        DialogType::PermissionRequest => render_permission_dialog(frame, dialog, theme, inner),
+        DialogType::Question => render_question_dialog(frame, dialog, theme, inner),
     }
 }
 
-/// Render a selection dialog (model or provider selector)
+// ============================================================================
+// Dialog Type Renderers
+// ============================================================================
+
+/// Render a selection dialog (model, provider, session selector, etc.)
 fn render_select_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -84,31 +129,27 @@ fn render_select_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, 
         ])
         .split(area);
 
-    // Message
+    // Message (dimmed for selector dialogs)
     if let Some(message) = &dialog.message {
-        let msg = Paragraph::new(message.as_str()).style(Style::default().fg(theme.dim));
+        let msg = Paragraph::new(message.as_str()).style(theme.text_dim());
         frame.render_widget(msg, chunks[0]);
     }
 
-    // Search input with match count (fzf style)
-    let match_count = dialog.filtered_indices.len();
-    let total_count = dialog.items.len();
-    let count_text = format!(" {}/{}", match_count, total_count);
-
-    let search_text = if dialog.search_query.is_empty() {
+    // Search input with match count
+    let count_text = format!(" {}/{}", dialog.filtered_indices.len(), dialog.items.len());
+    let search_spans = if dialog.search_query.is_empty() {
         vec![
-            Span::styled("> ", Style::default().fg(theme.accent)),
-            Span::styled("Type to search...", Style::default().fg(theme.dim)),
+            Span::styled("> ", theme.text_accent()),
+            Span::styled("Type to search...", theme.text_dim()),
         ]
     } else {
         vec![
-            Span::styled("> ", Style::default().fg(theme.accent)),
-            Span::styled(&dialog.search_query, Style::default().fg(theme.foreground)),
-            Span::styled(count_text, Style::default().fg(theme.dim)),
+            Span::styled("> ", theme.text_accent()),
+            Span::styled(&dialog.search_query, theme.text()),
+            Span::styled(count_text, theme.text_dim()),
         ]
     };
-    let search = Paragraph::new(Line::from(search_text));
-    frame.render_widget(search, chunks[1]);
+    frame.render_widget(Paragraph::new(Line::from(search_spans)), chunks[1]);
 
     // List items
     let visible_count = chunks[3].height as usize;
@@ -124,134 +165,72 @@ fn render_select_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, 
             let item = &dialog.items[item_idx];
             let is_selected = start_index + i == dialog.selected_index;
 
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.foreground)
+            let content = match &item.description {
+                Some(desc) => format!("  {} - {}", item.label, desc),
+                None => format!("  {}", item.label),
             };
 
-            // Format: label - description (fzf style)
-            let content = if let Some(desc) = &item.description {
-                format!("  {} - {}", item.label, desc)
-            } else {
-                format!("  {}", item.label)
-            };
-
-            ListItem::new(content).style(style)
+            ListItem::new(content).style(selection_style(theme, is_selected))
         })
         .collect();
 
     if items.is_empty() {
         let empty = Paragraph::new("No matches")
-            .style(Style::default().fg(theme.dim))
+            .style(theme.text_dim())
             .alignment(Alignment::Center);
         frame.render_widget(empty, chunks[3]);
     } else {
-        let list = List::new(items);
-        frame.render_widget(list, chunks[3]);
+        frame.render_widget(List::new(items), chunks[3]);
     }
 
-    // Help text (fzf style)
-    let help = Paragraph::new("Up/Down: Navigate | Enter: Select | Esc: Cancel")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[4]);
+    render_help_text(
+        frame,
+        theme,
+        chunks[4],
+        "Up/Down: Navigate | Enter: Select | Esc: Cancel",
+    );
 }
 
-/// Render session rename dialog
-fn render_rename_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
+/// Render an input dialog (API key input or session rename)
+fn render_input_dialog(
+    frame: &mut Frame,
+    dialog: &DialogState,
+    theme: &Theme,
+    area: Rect,
+    mask_input: bool,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2), // Message
-            Constraint::Length(1), // Spacer
-            Constraint::Length(3), // Input
-            Constraint::Min(1),    // Spacer
-            Constraint::Length(1), // Help
-        ])
+        .constraints(input_dialog_constraints())
         .split(area);
 
-    // Message
-    if let Some(message) = &dialog.message {
-        let msg = Paragraph::new(message.as_str())
-            .style(Style::default().fg(theme.foreground))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, chunks[0]);
-    }
+    render_message(frame, theme, chunks[0], dialog.message.as_deref(), true);
 
-    // Input field
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.accent))
-        .title(" Session Name ");
+    // Input field with appropriate title
+    let (title, placeholder, help_text) = if mask_input {
+        ("API Key", "Enter API key...", "Enter: Save | Esc: Back")
+    } else {
+        (
+            "Session Name",
+            "Enter session name...",
+            "Enter: Save | Esc: Cancel",
+        )
+    };
 
+    let input_block = create_input_block(theme, title);
     let inner_input = input_block.inner(chunks[2]);
     frame.render_widget(input_block, chunks[2]);
 
-    // Display the current input value
     let display_text = if dialog.input_value.is_empty() {
-        Span::styled("Enter session name...", Style::default().fg(theme.dim))
+        Span::styled(placeholder, theme.text_dim())
+    } else if mask_input {
+        Span::styled("*".repeat(dialog.input_value.len().min(40)), theme.text())
     } else {
-        Span::styled(&dialog.input_value, Style::default().fg(theme.foreground))
+        Span::styled(&dialog.input_value, theme.text())
     };
-    let input = Paragraph::new(display_text);
-    frame.render_widget(input, inner_input);
+    frame.render_widget(Paragraph::new(display_text), inner_input);
 
-    // Help text
-    let help = Paragraph::new("Enter: Save | Esc: Cancel")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[4]);
-}
-
-/// Render an input dialog (API key input)
-fn render_input_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2), // Message
-            Constraint::Length(1), // Spacer
-            Constraint::Length(3), // Input
-            Constraint::Min(1),    // Spacer
-            Constraint::Length(1), // Help
-        ])
-        .split(area);
-
-    // Message
-    if let Some(message) = &dialog.message {
-        let msg = Paragraph::new(message.as_str())
-            .style(Style::default().fg(theme.foreground))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, chunks[0]);
-    }
-
-    // Input field
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.accent))
-        .title(" API Key ");
-
-    let inner_input = input_block.inner(chunks[2]);
-    frame.render_widget(input_block, chunks[2]);
-
-    // Mask the API key with asterisks
-    let display_text = if dialog.input_value.is_empty() {
-        Span::styled("Enter API key...", Style::default().fg(theme.dim))
-    } else {
-        let masked = "*".repeat(dialog.input_value.len().min(40));
-        Span::styled(masked, Style::default().fg(theme.foreground))
-    };
-    let input = Paragraph::new(display_text);
-    frame.render_widget(input, inner_input);
-
-    // Help text
-    let help = Paragraph::new("Enter: Save | Esc: Back")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[4]);
+    render_help_text(frame, theme, chunks[4], help_text);
 }
 
 /// Render OAuth device code dialog
@@ -265,57 +244,47 @@ fn render_device_code_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Th
             Constraint::Length(1), // URL
             Constraint::Length(1), // Spacer
             Constraint::Length(1), // Code label
-            Constraint::Length(2), // Code (large)
+            Constraint::Length(2), // Code
             Constraint::Min(1),    // Spacer
             Constraint::Length(1), // Help
         ])
         .split(area);
 
-    // Message
     let msg = Paragraph::new("Open your browser and enter the code:")
-        .style(Style::default().fg(theme.foreground))
+        .style(theme.text())
         .alignment(Alignment::Center);
     frame.render_widget(msg, chunks[0]);
 
-    // URL
     if let Some(uri) = &dialog.verification_uri {
         let url_label = Paragraph::new("Go to:")
-            .style(Style::default().fg(theme.dim))
+            .style(theme.text_dim())
             .alignment(Alignment::Center);
         frame.render_widget(url_label, chunks[2]);
 
         let url = Paragraph::new(uri.as_str())
-            .style(
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(theme.text_accent().add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center);
         frame.render_widget(url, chunks[3]);
     }
 
-    // User code
     if let Some(code) = &dialog.user_code {
         let code_label = Paragraph::new("Enter code:")
-            .style(Style::default().fg(theme.dim))
+            .style(theme.text_dim())
             .alignment(Alignment::Center);
         frame.render_widget(code_label, chunks[5]);
 
         let code_display = Paragraph::new(code.as_str())
-            .style(
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(theme.text().add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center);
         frame.render_widget(code_display, chunks[6]);
     }
 
-    // Help text
-    let help = Paragraph::new("Waiting for authorization... (Esc to cancel)")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[8]);
+    render_help_text(
+        frame,
+        theme,
+        chunks[8],
+        "Waiting for authorization... (Esc to cancel)",
+    );
 }
 
 /// Render waiting dialog
@@ -330,19 +299,14 @@ fn render_waiting_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme,
         ])
         .split(area);
 
-    // Message
     let message = dialog.message.as_deref().unwrap_or("Processing...");
     let msg = Paragraph::new(message)
-        .style(Style::default().fg(theme.foreground))
+        .style(theme.text())
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
     frame.render_widget(msg, chunks[1]);
 
-    // Help text
-    let help = Paragraph::new("Esc: Cancel")
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[3]);
+    render_help_text(frame, theme, chunks[3], "Esc: Cancel");
 }
 
 /// Render permission request dialog
@@ -362,8 +326,7 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
         .split(area);
 
     // Title
-    let title_text = "Permission Required";
-    let title = Paragraph::new(title_text)
+    let title = Paragraph::new("Permission Required")
         .style(
             Style::default()
                 .fg(theme.warning)
@@ -372,92 +335,85 @@ fn render_permission_dialog(frame: &mut Frame, dialog: &DialogState, theme: &The
         .alignment(Alignment::Center);
     frame.render_widget(title, chunks[0]);
 
+    let Some(req) = &dialog.permission_request else {
+        return;
+    };
+
     // Tool name
-    if let Some(req) = &dialog.permission_request {
-        let tool_label = format!("Permission: {}", req.permission);
-        let tool = Paragraph::new(tool_label)
-            .style(Style::default().fg(theme.accent))
-            .alignment(Alignment::Left);
-        frame.render_widget(tool, chunks[2]);
+    let tool = Paragraph::new(format!("Permission: {}", req.permission))
+        .style(theme.text_accent())
+        .alignment(Alignment::Left);
+    frame.render_widget(tool, chunks[2]);
 
-        // Patterns and metadata
-        let patterns_text = req.patterns.join(", ");
-        let metadata_text =
-            serde_json::to_string_pretty(&req.metadata).unwrap_or_else(|_| "{}".to_string());
+    // Patterns and metadata
+    let metadata_text =
+        serde_json::to_string_pretty(&req.metadata).unwrap_or_else(|_| "{}".to_string());
+    let truncated_metadata = if metadata_text.len() > 300 {
+        format!("{}...", &metadata_text[..300])
+    } else {
+        metadata_text
+    };
 
-        let details_text = format!(
-            "Patterns: {}\n\nMetadata:\n{}",
-            patterns_text,
-            if metadata_text.len() > 300 {
-                format!("{}...", &metadata_text[..300])
+    let details = Paragraph::new(format!(
+        "Patterns: {}\n\nMetadata:\n{}",
+        req.patterns.join(", "),
+        truncated_metadata
+    ))
+    .style(theme.text())
+    .wrap(Wrap { trim: true });
+    frame.render_widget(details, chunks[4]);
+
+    // Permission options
+    let selected = dialog.selected_permission_option;
+    let options_config: [(usize, &str, &str, ratatui::style::Color); 5] = [
+        (0, "[Y]", " Once    ", theme.success),
+        (1, "[S]", " Session    ", theme.accent),
+        (2, "[W]", " Workspace    ", theme.accent),
+        (3, "[G]", " Global    ", theme.accent),
+        (4, "[N]", " Reject", theme.error),
+    ];
+
+    let option_spans: Vec<Span> = options_config
+        .iter()
+        .flat_map(|(idx, key, label, color)| {
+            let is_selected = selected == *idx;
+            let key_style = if is_selected {
+                Style::default()
+                    .fg(theme.background)
+                    .bg(*color)
+                    .add_modifier(Modifier::BOLD)
             } else {
-                metadata_text
-            }
-        );
+                Style::default().fg(*color).add_modifier(Modifier::BOLD)
+            };
+            let label_style = if is_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            [
+                Span::styled(*key, key_style),
+                Span::styled(*label, label_style),
+            ]
+        })
+        .collect();
 
-        let details = Paragraph::new(details_text)
-            .style(Style::default().fg(theme.foreground))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(details, chunks[4]);
+    let options_widget = Paragraph::new(vec![Line::from(option_spans)])
+        .alignment(Alignment::Center)
+        .style(theme.text());
+    frame.render_widget(options_widget, chunks[6]);
 
-        // Options with selection highlighting
-        // 0=Once, 1=Session, 2=Workspace, 3=Global, 4=Reject
-        let selected = dialog.selected_permission_option;
-
-        // Permission option configuration: (index, key, label, color)
-        let options = [
-            (0, "[Y]", " Once    ", theme.success),
-            (1, "[S]", " Session    ", theme.accent),
-            (2, "[W]", " Workspace    ", theme.accent),
-            (3, "[G]", " Global    ", theme.accent),
-            (4, "[N]", " Reject", theme.error),
-        ];
-
-        let option_spans: Vec<Span> = options
-            .iter()
-            .flat_map(|(idx, key, label, color)| {
-                let is_selected = selected == *idx;
-                let key_style = if is_selected {
-                    Style::default()
-                        .fg(theme.background)
-                        .bg(*color)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(*color).add_modifier(Modifier::BOLD)
-                };
-                let label_style = if is_selected {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                [
-                    Span::styled(*key, key_style),
-                    Span::styled(*label, label_style),
-                ]
-            })
-            .collect();
-
-        let options = vec![Line::from(option_spans)];
-        let options_widget = Paragraph::new(options)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(theme.foreground));
-        frame.render_widget(options_widget, chunks[6]);
-    }
-
-    // Help text
-    let help = Paragraph::new(
+    render_help_text(
+        frame,
+        theme,
+        chunks[7],
         "Left/Right: Navigate | Enter: Confirm | Y/S/W/G/N: Direct select | Esc: Cancel",
-    )
-    .style(Style::default().fg(theme.dim))
-    .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[7]);
+    );
 }
 
 /// Render question dialog
 fn render_question_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme, area: Rect) {
-    let request = match &dialog.question_request {
-        Some(req) => req,
-        None => return,
+    let Some(request) = &dialog.question_request else {
+        return;
     };
 
     let question_count = request.questions.len();
@@ -467,42 +423,43 @@ fn render_question_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Question tabs (if multi-question)
+            Constraint::Length(2), // Question tabs
             Constraint::Length(1), // Spacer
             Constraint::Length(2), // Question text
             Constraint::Length(1), // Spacer
             Constraint::Min(5),    // Options
-            Constraint::Length(3), // Custom input (if editing)
+            Constraint::Length(3), // Custom input
             Constraint::Length(1), // Help
         ])
         .split(area);
 
     // Question tabs (if multiple questions)
     if question_count > 1 {
-        let mut tab_spans = vec![];
-        for (idx, q) in request.questions.iter().enumerate() {
-            let is_current = idx == current_idx;
-            let has_answer = !dialog.question_answers[idx].is_empty();
+        let tab_spans: Vec<Span> = request
+            .questions
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, q)| {
+                let is_current = idx == current_idx;
+                let has_answer = !dialog.question_answers[idx].is_empty();
+                let indicator = if has_answer { " ✓" } else { "" };
+                let tab_text = format!(" {}{} ", q.header, indicator);
 
-            let indicator = if has_answer { " ✓" } else { "" };
-            let tab_text = format!(" {}{} ", q.header, indicator);
+                let style = if is_current {
+                    selection_style(theme, true)
+                } else if has_answer {
+                    Style::default().fg(theme.success)
+                } else {
+                    theme.text_dim()
+                };
 
-            let style = if is_current {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else if has_answer {
-                Style::default().fg(theme.success)
-            } else {
-                Style::default().fg(theme.dim)
-            };
-
-            tab_spans.push(Span::styled(tab_text, style));
-            if idx + 1 < question_count {
-                tab_spans.push(Span::raw(" "));
-            }
-        }
+                let mut spans = vec![Span::styled(tab_text, style)];
+                if idx + 1 < question_count {
+                    spans.push(Span::raw(" "));
+                }
+                spans
+            })
+            .collect();
 
         let tabs = Paragraph::new(Line::from(tab_spans)).alignment(Alignment::Center);
         frame.render_widget(tabs, chunks[0]);
@@ -516,104 +473,76 @@ fn render_question_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme
     };
 
     let question_widget = Paragraph::new(question_text)
-        .style(
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(Modifier::BOLD),
-        )
+        .style(theme.text().add_modifier(Modifier::BOLD))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true });
     frame.render_widget(question_widget, chunks[2]);
 
     // Options list
-    let mut option_items: Vec<ListItem> = vec![];
-    for (idx, option) in current_question.options.iter().enumerate() {
-        let is_selected = dialog.current_option_index == idx;
-        let is_answered = dialog.question_answers[current_idx]
-            .iter()
-            .any(|a| a == &option.label);
+    let option_items: Vec<ListItem> = current_question
+        .options
+        .iter()
+        .enumerate()
+        .map(|(idx, option)| {
+            let is_selected = dialog.current_option_index == idx;
+            let is_answered = dialog.question_answers[current_idx]
+                .iter()
+                .any(|a| a == &option.label);
 
-        let checkbox = if current_question.multiple {
-            if is_answered {
-                "[✓] "
+            let checkbox = match (current_question.multiple, is_answered) {
+                (true, true) => "[✓] ",
+                (true, false) => "[ ] ",
+                (false, true) => "(•) ",
+                (false, false) => "( ) ",
+            };
+
+            let content = format!("{}. {}{}", idx + 1, checkbox, option.label);
+            let style = if is_selected {
+                selection_style(theme, true)
+            } else if is_answered {
+                Style::default().fg(theme.success)
             } else {
-                "[ ] "
+                theme.text()
+            };
+
+            let mut lines = vec![Line::from(Span::styled(content, style))];
+            if !option.description.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", option.description),
+                    theme.text_dim(),
+                )));
             }
-        } else if is_answered {
-            "(•) "
-        } else {
-            "( ) "
-        };
 
-        let number = format!("{}. ", idx + 1);
-        let content = format!("{}{}{}", number, checkbox, option.label);
-
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.background)
-                .bg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else if is_answered {
-            Style::default().fg(theme.success)
-        } else {
-            Style::default().fg(theme.foreground)
-        };
-
-        let mut lines = vec![Line::from(Span::styled(content, style))];
-
-        // Add description
-        if !option.description.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("    {}", option.description),
-                Style::default().fg(theme.dim),
-            )));
-        }
-
-        option_items.push(ListItem::new(lines));
-    }
+            ListItem::new(lines)
+        })
+        .collect();
 
     // Custom answer option
+    let mut all_items = option_items;
     if current_question.custom {
         let custom_idx = current_question.options.len();
         let is_selected = dialog.current_option_index == custom_idx;
         let content = format!("{}. Type your own answer", custom_idx + 1);
-
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.background)
-                .bg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.foreground)
-        };
-
-        option_items.push(ListItem::new(Line::from(Span::styled(content, style))));
+        all_items.push(ListItem::new(Line::from(Span::styled(
+            content,
+            selection_style(theme, is_selected),
+        ))));
     }
 
-    let options_list = List::new(option_items);
-    frame.render_widget(options_list, chunks[4]);
+    frame.render_widget(List::new(all_items), chunks[4]);
 
     // Custom answer input (if editing)
     if dialog.is_editing_custom {
-        let input_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.accent))
-            .title(" Custom Answer ");
-
+        let input_block = create_input_block(theme, "Custom Answer");
         let inner_input = input_block.inner(chunks[5]);
         frame.render_widget(input_block, chunks[5]);
 
         let display_text = if dialog.custom_answer_input.is_empty() {
-            Span::styled("Type your answer...", Style::default().fg(theme.dim))
+            Span::styled("Type your answer...", theme.text_dim())
         } else {
-            Span::styled(
-                &dialog.custom_answer_input,
-                Style::default().fg(theme.foreground),
-            )
+            Span::styled(&dialog.custom_answer_input, theme.text())
         };
-
-        let input = Paragraph::new(display_text);
-        frame.render_widget(input, inner_input);
+        frame.render_widget(Paragraph::new(display_text), inner_input);
     }
 
     // Help text
@@ -625,8 +554,5 @@ fn render_question_dialog(frame: &mut Frame, dialog: &DialogState, theme: &Theme
         "Up/Down: Navigate | Enter/Space: Select | S: Submit | Esc: Cancel"
     };
 
-    let help = Paragraph::new(help_text)
-        .style(Style::default().fg(theme.dim))
-        .alignment(Alignment::Center);
-    frame.render_widget(help, chunks[6]);
+    render_help_text(frame, theme, chunks[6], help_text);
 }

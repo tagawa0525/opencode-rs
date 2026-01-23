@@ -1,9 +1,7 @@
 use opencode::slash_command::{
     loader::load_commands_from_directory, registry::CommandRegistry, CommandContext,
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_execute_markdown_command() {
@@ -21,12 +19,7 @@ async fn test_execute_markdown_command() {
     }
 
     // Create context
-    let ctx = CommandContext {
-        session_id: "test-session".to_string(),
-        cwd: base_path.to_str().unwrap().to_string(),
-        root: base_path.to_str().unwrap().to_string(),
-        extra: HashMap::new(),
-    };
+    let ctx = CommandContext {};
 
     // Execute test-rust command
     let result = registry
@@ -62,12 +55,7 @@ async fn test_execute_command_with_model_override() {
     }
 
     // Create context
-    let ctx = CommandContext {
-        session_id: "test-session".to_string(),
-        cwd: base_path.to_str().unwrap().to_string(),
-        root: base_path.to_str().unwrap().to_string(),
-        extra: HashMap::new(),
-    };
+    let ctx = CommandContext {};
 
     // Execute commit command (which has model override)
     let result = registry

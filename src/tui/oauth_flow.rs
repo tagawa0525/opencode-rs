@@ -20,8 +20,6 @@ pub async fn start_copilot_oauth_flow(tx: mpsc::Sender<AppEvent>) {
                 .send(AppEvent::DeviceCodeReceived {
                     user_code: device_code_response.user_code.clone(),
                     verification_uri: device_code_response.verification_uri.clone(),
-                    device_code: device_code_response.device_code.clone(),
-                    interval: device_code_response.interval,
                 })
                 .await;
 

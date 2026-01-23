@@ -4,6 +4,7 @@
 //! and assistant messages. Part types are defined in parts.rs.
 
 use crate::bus::{self, Event};
+#[cfg(test)]
 use crate::id::{self, IdPrefix};
 use crate::storage;
 use anyhow::{Context, Result};
@@ -12,18 +13,9 @@ use serde::{Deserialize, Serialize};
 // Re-export Part types from parts module
 pub use super::parts::*;
 
-/// Message role
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageRole {
-    User,
-    Assistant,
-}
-
 /// Base message information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role")]
-#[allow(clippy::large_enum_variant)]
 pub enum Message {
     #[serde(rename = "user")]
     User(UserMessage),
@@ -43,61 +35,6 @@ impl Message {
         match self {
             Message::User(m) => &m.session_id,
             Message::Assistant(m) => &m.session_id,
-        }
-    }
-
-    pub fn role(&self) -> MessageRole {
-        match self {
-            Message::User(_) => MessageRole::User,
-            Message::Assistant(_) => MessageRole::Assistant,
-        }
-    }
-
-    /// Create a new user message
-    pub fn user(session_id: &str, agent: &str, model: ModelRef) -> UserMessage {
-        let now = chrono::Utc::now().timestamp_millis();
-        UserMessage {
-            id: id::ascending(IdPrefix::Message),
-            session_id: session_id.to_string(),
-            time: MessageTime { created: now },
-            agent: agent.to_string(),
-            model,
-            summary: None,
-            system: None,
-            tools: None,
-            variant: None,
-        }
-    }
-
-    /// Create a new assistant message
-    pub fn assistant(
-        session_id: &str,
-        parent_id: &str,
-        agent: &str,
-        provider_id: &str,
-        model_id: &str,
-        path: MessagePath,
-    ) -> AssistantMessage {
-        let now = chrono::Utc::now().timestamp_millis();
-        AssistantMessage {
-            id: id::ascending(IdPrefix::Message),
-            session_id: session_id.to_string(),
-            parent_id: parent_id.to_string(),
-            time: AssistantMessageTime {
-                created: now,
-                completed: None,
-            },
-            agent: agent.to_string(),
-            provider_id: provider_id.to_string(),
-            model_id: model_id.to_string(),
-            #[allow(deprecated)]
-            mode: agent.to_string(), // deprecated
-            path,
-            error: None,
-            summary: None,
-            cost: 0.0,
-            tokens: TokenUsage::default(),
-            finish: None,
         }
     }
 
@@ -128,21 +65,9 @@ impl Message {
             .await
             .context("Failed to save message")?;
 
-        bus::publish(MessageUpdated {
-            message: self.clone(),
-        })
-        .await;
+        bus::publish(MessageUpdated {}).await;
 
         Ok(())
-    }
-
-    /// Get message with its parts
-    pub async fn with_parts(&self) -> Result<MessageWithParts> {
-        let parts = Part::list(self.id()).await?;
-        Ok(MessageWithParts {
-            message: self.clone(),
-            parts,
-        })
     }
 }
 
@@ -174,8 +99,6 @@ pub struct AssistantMessage {
     pub agent: String,
     pub provider_id: String,
     pub model_id: String,
-    #[deprecated(note = "Use agent instead")]
-    pub mode: String,
     pub path: MessagePath,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<MessageError>,
@@ -224,15 +147,14 @@ pub struct UserSummary {
 /// Message errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name")]
-#[allow(clippy::enum_variant_names)]
 pub enum MessageError {
     #[serde(rename = "ProviderAuthError")]
-    AuthError {
+    Auth {
         provider_id: String,
         message: String,
     },
     #[serde(rename = "APIError")]
-    ApiError {
+    Api {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         status_code: Option<u16>,
@@ -243,9 +165,9 @@ pub enum MessageError {
         response_body: Option<String>,
     },
     #[serde(rename = "MessageOutputLengthError")]
-    OutputLengthError {},
+    OutputLength {},
     #[serde(rename = "MessageAbortedError")]
-    AbortedError { message: String },
+    Aborted { message: String },
 }
 
 /// Token usage statistics
@@ -263,72 +185,37 @@ pub struct CacheUsage {
     pub write: u64,
 }
 
-/// Message with its parts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageWithParts {
-    pub message: Message,
-    pub parts: Vec<Part>,
-}
-
 /// Message events
 #[derive(Debug, Clone)]
-pub struct MessageUpdated {
-    pub message: Message,
-}
+pub struct MessageUpdated {}
 
 impl Event for MessageUpdated {}
-
-#[derive(Debug, Clone)]
-pub struct MessageRemoved {
-    pub session_id: String,
-    pub message_id: String,
-}
-impl Event for MessageRemoved {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    mod message_role {
-        use super::*;
-
-        #[test]
-        fn test_serialize_user() {
-            let role = MessageRole::User;
-            let json = serde_json::to_string(&role).unwrap();
-            assert_eq!(json, r#""user""#);
-        }
-
-        #[test]
-        fn test_serialize_assistant() {
-            let role = MessageRole::Assistant;
-            let json = serde_json::to_string(&role).unwrap();
-            assert_eq!(json, r#""assistant""#);
-        }
-
-        #[test]
-        fn test_deserialize_user() {
-            let role: MessageRole = serde_json::from_str(r#""user""#).unwrap();
-            assert_eq!(role, MessageRole::User);
-        }
-
-        #[test]
-        fn test_deserialize_assistant() {
-            let role: MessageRole = serde_json::from_str(r#""assistant""#).unwrap();
-            assert_eq!(role, MessageRole::Assistant);
-        }
-    }
 
     mod message {
         use super::*;
 
         #[test]
         fn test_user_message_creation() {
+            let now = chrono::Utc::now().timestamp_millis();
             let model = ModelRef {
                 provider_id: "anthropic".to_string(),
                 model_id: "claude-3-5-sonnet".to_string(),
             };
-            let msg = Message::user("session_123", "default", model);
+            let msg = UserMessage {
+                id: id::ascending(IdPrefix::Message),
+                session_id: "session_123".to_string(),
+                time: MessageTime { created: now },
+                agent: "default".to_string(),
+                model,
+                summary: None,
+                system: None,
+                tools: None,
+                variant: None,
+            };
 
             assert!(msg.id.starts_with("msg_"));
             assert_eq!(msg.session_id, "session_123");
@@ -338,18 +225,29 @@ mod tests {
 
         #[test]
         fn test_assistant_message_creation() {
+            let now = chrono::Utc::now().timestamp_millis();
             let path = MessagePath {
                 cwd: "/home/user".to_string(),
                 root: "/home/user/project".to_string(),
             };
-            let msg = Message::assistant(
-                "session_123",
-                "msg_parent",
-                "default",
-                "anthropic",
-                "claude-3-5-sonnet",
+            let msg = AssistantMessage {
+                id: id::ascending(IdPrefix::Message),
+                session_id: "session_123".to_string(),
+                parent_id: "msg_parent".to_string(),
+                time: AssistantMessageTime {
+                    created: now,
+                    completed: None,
+                },
+                agent: "default".to_string(),
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
                 path,
-            );
+                error: None,
+                summary: None,
+                cost: 0.0,
+                tokens: TokenUsage::default(),
+                finish: None,
+            };
 
             assert!(msg.id.starts_with("msg_"));
             assert_eq!(msg.session_id, "session_123");
@@ -360,47 +258,68 @@ mod tests {
 
         #[test]
         fn test_message_id() {
+            let now = chrono::Utc::now().timestamp_millis();
             let model = ModelRef {
                 provider_id: "anthropic".to_string(),
                 model_id: "claude-3-5-sonnet".to_string(),
             };
-            let user_msg = Message::User(Message::user("session_123", "default", model.clone()));
+            let user_msg = Message::User(UserMessage {
+                id: id::ascending(IdPrefix::Message),
+                session_id: "session_123".to_string(),
+                time: MessageTime { created: now },
+                agent: "default".to_string(),
+                model: model.clone(),
+                summary: None,
+                system: None,
+                tools: None,
+                variant: None,
+            });
 
             let path = MessagePath {
                 cwd: "/home/user".to_string(),
                 root: "/home/user/project".to_string(),
             };
-            let assistant_msg = Message::Assistant(Message::assistant(
-                "session_123",
-                "msg_parent",
-                "default",
-                "anthropic",
-                "claude-3-5-sonnet",
+            let assistant_msg = Message::Assistant(AssistantMessage {
+                id: id::ascending(IdPrefix::Message),
+                session_id: "session_123".to_string(),
+                parent_id: "msg_parent".to_string(),
+                time: AssistantMessageTime {
+                    created: now,
+                    completed: None,
+                },
+                agent: "default".to_string(),
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-3-5-sonnet".to_string(),
                 path,
-            ));
+                error: None,
+                summary: None,
+                cost: 0.0,
+                tokens: TokenUsage::default(),
+                finish: None,
+            });
 
             assert!(user_msg.id().starts_with("msg_"));
             assert!(assistant_msg.id().starts_with("msg_"));
         }
 
         #[test]
-        fn test_message_role() {
-            let model = ModelRef {
-                provider_id: "anthropic".to_string(),
-                model_id: "claude-3-5-sonnet".to_string(),
-            };
-            let user_msg = Message::User(Message::user("session_123", "default", model));
-
-            assert_eq!(user_msg.role(), MessageRole::User);
-        }
-
-        #[test]
         fn test_message_serialize_deserialize() {
+            let now = chrono::Utc::now().timestamp_millis();
             let model = ModelRef {
                 provider_id: "anthropic".to_string(),
                 model_id: "claude-3-5-sonnet".to_string(),
             };
-            let user_msg = Message::User(Message::user("session_123", "default", model));
+            let user_msg = Message::User(UserMessage {
+                id: id::ascending(IdPrefix::Message),
+                session_id: "session_123".to_string(),
+                time: MessageTime { created: now },
+                agent: "default".to_string(),
+                model,
+                summary: None,
+                system: None,
+                tools: None,
+                variant: None,
+            });
 
             let json = serde_json::to_string(&user_msg).unwrap();
             let parsed: Message = serde_json::from_str(&json).unwrap();
@@ -415,7 +334,7 @@ mod tests {
 
         #[test]
         fn test_auth_error_serialize() {
-            let error = MessageError::AuthError {
+            let error = MessageError::Auth {
                 provider_id: "anthropic".to_string(),
                 message: "Invalid API key".to_string(),
             };
@@ -426,7 +345,7 @@ mod tests {
 
         #[test]
         fn test_api_error_serialize() {
-            let error = MessageError::ApiError {
+            let error = MessageError::Api {
                 message: "Rate limit exceeded".to_string(),
                 status_code: Some(429),
                 is_retryable: true,
@@ -441,14 +360,14 @@ mod tests {
 
         #[test]
         fn test_output_length_error_serialize() {
-            let error = MessageError::OutputLengthError {};
+            let error = MessageError::OutputLength {};
             let json = serde_json::to_string(&error).unwrap();
             assert!(json.contains(r#""name":"MessageOutputLengthError""#));
         }
 
         #[test]
         fn test_aborted_error_serialize() {
-            let error = MessageError::AbortedError {
+            let error = MessageError::Aborted {
                 message: "User cancelled".to_string(),
             };
             let json = serde_json::to_string(&error).unwrap();

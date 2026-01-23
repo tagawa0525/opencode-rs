@@ -1,6 +1,5 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use regex::Regex;
-use std::path::Path;
 use tokio::process::Command;
 
 /// Parsed slash command with name and arguments
@@ -34,11 +33,6 @@ impl ParsedCommand {
         let args = parts.next().unwrap_or("").trim().to_string();
 
         Some(ParsedCommand { name, args })
-    }
-
-    /// Parse arguments into a vector of strings, respecting quotes
-    pub fn parse_args(&self) -> Vec<String> {
-        parse_quoted_args(&self.args)
     }
 }
 

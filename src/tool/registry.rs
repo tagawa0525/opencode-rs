@@ -71,22 +71,10 @@ impl ToolRegistry {
         }
     }
 
-    /// Register a new tool
-    pub async fn register(&self, tool: Arc<dyn Tool>) {
-        let mut tools = self.tools.write().await;
-        tools.insert(tool.id().to_string(), tool);
-    }
-
     /// Get a tool by ID
     pub async fn get(&self, id: &str) -> Option<Arc<dyn Tool>> {
         let tools = self.tools.read().await;
         tools.get(id).cloned()
-    }
-
-    /// Get all registered tools
-    pub async fn list(&self) -> Vec<Arc<dyn Tool>> {
-        let tools = self.tools.read().await;
-        tools.values().cloned().collect()
     }
 
     /// Get list of tool IDs
@@ -119,15 +107,6 @@ impl ToolRegistry {
         tools.values().map(|t| t.definition()).collect()
     }
 
-    /// Get tool definitions filtered by tool IDs
-    pub async fn definitions_for(&self, tool_ids: &[&str]) -> Vec<ToolDefinition> {
-        let tools = self.tools.read().await;
-        tool_ids
-            .iter()
-            .filter_map(|id| tools.get(*id).map(|t| t.definition()))
-            .collect()
-    }
-
     /// Execute a tool by ID
     pub async fn execute(
         &self,
@@ -151,9 +130,8 @@ impl Default for ToolRegistry {
 }
 
 // Global tool registry
-lazy_static::lazy_static! {
-    static ref GLOBAL_REGISTRY: Arc<ToolRegistry> = Arc::new(ToolRegistry::with_defaults());
-}
+static GLOBAL_REGISTRY: std::sync::LazyLock<Arc<ToolRegistry>> =
+    std::sync::LazyLock::new(|| Arc::new(ToolRegistry::with_defaults()));
 
 /// Get the global tool registry
 pub fn registry() -> Arc<ToolRegistry> {

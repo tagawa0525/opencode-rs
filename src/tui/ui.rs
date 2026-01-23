@@ -46,9 +46,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render input
     let input = InputBox {
         content: &app.input,
-        cursor_position: app.cursor_position,
         placeholder: "Type a message... (Enter to send, Shift+Enter for newline)",
-        focused: true,
         theme,
     };
     frame.render_widget(input, chunks[2]);
@@ -130,9 +128,7 @@ fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             MessageWidget {
                 role,
                 content,
-                timestamp: "",
                 theme: &app.theme,
-                selected: false,
             },
             msg_area,
         );

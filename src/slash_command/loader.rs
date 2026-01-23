@@ -1,13 +1,12 @@
-use super::markdown::{parse_markdown_file, MarkdownFile};
+use super::markdown::parse_markdown_file;
 use super::template::TemplateCommand;
 use super::SlashCommand;
 use crate::config::CommandConfig;
 use anyhow::{Context, Result};
+use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs;
-use walkdir::WalkDir;
 
 /// Load slash commands from markdown files in the .opencode/command directory
 pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dyn SlashCommand>>> {
@@ -27,10 +26,14 @@ pub async fn load_commands_from_directory(base_path: &Path) -> Result<Vec<Arc<dy
         tracing::debug!("Loading commands from: {:?}", dir);
 
         // Walk through directory recursively
-        for entry in WalkDir::new(&dir)
+        for entry in WalkBuilder::new(&dir)
             .follow_links(true)
-            .max_depth(10) // Prevent infinite recursion from symlink loops
-            .into_iter()
+            .max_depth(Some(10)) // Prevent infinite recursion from symlink loops
+            .git_ignore(false) // Don't respect gitignore for .opencode directory
+            .git_global(false)
+            .git_exclude(false)
+            .hidden(false) // Include hidden files
+            .build()
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
@@ -194,6 +197,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_command_from_file() {
         use tempfile::TempDir;
+        use tokio::fs;
 
         let temp_dir = TempDir::new().unwrap();
         let command_dir = temp_dir.path().join("command");

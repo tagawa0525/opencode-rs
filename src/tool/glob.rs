@@ -17,10 +17,6 @@ impl GlobTool {
 
 #[async_trait::async_trait]
 impl Tool for GlobTool {
-    fn id(&self) -> &str {
-        "glob"
-    }
-
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "glob".to_string(),
@@ -53,41 +49,28 @@ impl Tool for GlobTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("pattern is required"))?;
 
-        // Resolve search path: if not absolute, join with cwd (like TypeScript version)
+        // Resolve search path using context helper
         let search_path_arg = args
             .get("path")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.cwd.clone());
+            .unwrap_or(&ctx.cwd);
 
-        let search_path = if Path::new(&search_path_arg).is_absolute() {
-            search_path_arg
-        } else {
-            Path::new(&ctx.cwd)
-                .join(&search_path_arg)
-                .to_string_lossy()
-                .to_string()
-        };
+        let search_path = ctx
+            .resolve_path(search_path_arg)
+            .to_string_lossy()
+            .to_string();
 
         // Request permission before globbing
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("pattern".to_string(), json!(pattern));
-        metadata.insert("path".to_string(), json!(search_path));
+        let metadata = HashMap::from([
+            ("pattern".to_string(), json!(pattern)),
+            ("path".to_string(), json!(search_path)),
+        ]);
 
-        let allowed = ctx
-            .ask_permission(
-                "glob".to_string(),
-                vec![pattern.to_string()],
-                vec!["*".to_string()],
-                metadata,
-            )
-            .await?;
-
-        if !allowed {
-            return Ok(ToolResult::error(
-                "Permission Denied",
-                format!("User denied permission to glob pattern: {}", pattern),
-            ));
+        if let Some(denied) = ctx
+            .require_permission("glob", vec![pattern.to_string()], metadata)
+            .await?
+        {
+            return Ok(denied);
         }
 
         // Build the glob pattern

@@ -10,7 +10,6 @@ mod edit;
 mod executor;
 mod glob;
 mod grep;
-mod invalid;
 mod model_utils;
 mod question;
 mod read;
@@ -25,7 +24,6 @@ pub use edit::EditTool;
 pub use executor::*;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
-pub use invalid::InvalidTool;
 pub use model_utils::*;
 pub use question::QuestionTool;
 pub use read::ReadTool;
@@ -133,8 +131,6 @@ pub struct ToolContext {
     pub session_id: String,
     /// Message ID
     pub message_id: String,
-    /// Agent name
-    pub agent: String,
     /// Model ID (e.g., "claude-sonnet-4-5")
     pub model_id: Option<String>,
     /// Abort signal
@@ -152,11 +148,10 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    pub fn new(session_id: &str, message_id: &str, agent: &str) -> Self {
+    pub fn new(session_id: &str, message_id: &str) -> Self {
         Self {
             session_id: session_id.to_string(),
             message_id: message_id.to_string(),
-            agent: agent.to_string(),
             model_id: None,
             abort: None,
             cwd: std::env::current_dir()
@@ -169,16 +164,6 @@ impl ToolContext {
             permission_handler: None,
             question_handler: None,
         }
-    }
-
-    pub fn with_model_id(mut self, model_id: String) -> Self {
-        self.model_id = Some(model_id);
-        self
-    }
-
-    pub fn with_abort(mut self, abort: tokio::sync::watch::Receiver<bool>) -> Self {
-        self.abort = Some(abort);
-        self
     }
 
     pub fn with_cwd(mut self, cwd: String) -> Self {
@@ -206,6 +191,18 @@ impl ToolContext {
         self.abort.as_ref().map(|rx| *rx.borrow()).unwrap_or(false)
     }
 
+    /// Resolve a path argument to an absolute path.
+    /// If the path is relative, it will be joined with the current working directory.
+    pub fn resolve_path(&self, path: &str) -> std::path::PathBuf {
+        use std::path::Path;
+        let p = Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            Path::new(&self.cwd).join(p)
+        }
+    }
+
     /// Request permission from user
     pub async fn ask_permission(
         &self,
@@ -231,6 +228,37 @@ impl ToolContext {
         } else {
             // No permission handler, default to deny for safety
             Ok(false)
+        }
+    }
+
+    /// Request permission and return an error result if denied.
+    /// This is a convenience method that combines permission check and denial handling.
+    pub async fn require_permission(
+        &self,
+        tool_name: &str,
+        patterns: Vec<String>,
+        metadata: HashMap<String, Value>,
+    ) -> Result<Option<ToolResult>> {
+        let allowed = self
+            .ask_permission(
+                tool_name.to_string(),
+                patterns.clone(),
+                vec!["*".to_string()],
+                metadata,
+            )
+            .await?;
+
+        if allowed {
+            Ok(None)
+        } else {
+            let target = patterns.first().cloned().unwrap_or_default();
+            Ok(Some(ToolResult::error(
+                "Permission Denied",
+                format!(
+                    "User denied permission to execute {}: {}",
+                    tool_name, target
+                ),
+            )))
         }
     }
 
@@ -311,9 +339,6 @@ pub struct FileAttachment {
 /// Trait for implementing tools
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
-    /// Get the tool's unique identifier
-    fn id(&self) -> &str;
-
     /// Get the tool definition for the LLM
     fn definition(&self) -> ToolDefinition;
 

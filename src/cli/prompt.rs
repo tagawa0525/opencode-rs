@@ -2,7 +2,9 @@
 
 use crate::config::Config;
 use crate::permission::PermissionChecker;
-use crate::provider::{self, ChatContent, ChatMessage, ContentPart, StreamEvent, ToolDefinition};
+use crate::provider::{
+    self, ChatContent, ChatMessage, ContentPart, OpenAIRequest, StreamEvent, ToolDefinition,
+};
 use crate::session::{CreateSessionOptions, ModelRef, Session};
 use crate::tool::{self, DoomLoopDetector, PendingToolCall, ToolCallTracker, ToolContext};
 use anyhow::Result;
@@ -133,7 +135,7 @@ async fn initialize_context(model: Option<&str>, format: &str) -> Result<(Prompt
 
     // Create tool context
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-    let tool_ctx = ToolContext::new("cli-session", "msg-1", "default")
+    let tool_ctx = ToolContext::new("cli-session", "msg-1")
         .with_cwd(cwd.clone())
         .with_root(cwd.clone())
         .with_permission_handler(permission_handler);
@@ -230,16 +232,14 @@ async fn create_provider_stream(
                 .model_api_url
                 .as_deref()
                 .unwrap_or("https://api.openai.com/v1");
+            let request = OpenAIRequest {
+                messages: messages.to_vec(),
+                system: Some(ctx.system_prompt.clone()),
+                tools: ctx.tool_defs.clone(),
+                max_tokens: ctx.max_tokens,
+            };
             client
-                .stream_openai(
-                    &ctx.api_key,
-                    base_url,
-                    &ctx.model_api_id,
-                    messages.to_vec(),
-                    Some(ctx.system_prompt.clone()),
-                    ctx.tool_defs.clone(),
-                    ctx.max_tokens,
-                )
+                .stream_openai(&ctx.api_key, base_url, &ctx.model_api_id, request)
                 .await
         }
         "copilot" => {
@@ -300,7 +300,6 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
             StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
-                ..
             } => {
                 if format == "text" {
                     if !last_printed_newline {
@@ -319,7 +318,6 @@ async fn process_stream(mut rx: mpsc::Receiver<StreamEvent>, format: &str) -> Re
                 eprintln!("\nError: {}", err);
                 return Err(anyhow::anyhow!(err));
             }
-            _ => {}
         }
     }
 

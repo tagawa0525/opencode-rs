@@ -23,14 +23,6 @@ pub struct AuthStorage {
     pub oauth_tokens: HashMap<String, OAuthTokenInfo>,
 }
 
-/// OAuth token structure (legacy, kept for compatibility)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthToken {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_at: Option<i64>,
-}
-
 impl AuthStorage {
     /// Get the auth storage file path
     pub fn storage_path() -> Option<PathBuf> {
@@ -76,35 +68,15 @@ impl AuthStorage {
         Ok(())
     }
 
-    /// Get API key for a provider
-    pub fn get_api_key(&self, provider_id: &str) -> Option<&String> {
-        self.api_keys.get(provider_id)
-    }
-
     /// Set API key for a provider
     pub fn set_api_key(&mut self, provider_id: &str, api_key: &str) {
         self.api_keys
             .insert(provider_id.to_string(), api_key.to_string());
     }
 
-    /// Remove API key for a provider
-    pub fn remove_api_key(&mut self, provider_id: &str) {
-        self.api_keys.remove(provider_id);
-    }
-
-    /// Get OAuth token for a provider
-    pub fn get_oauth_token(&self, provider_id: &str) -> Option<&OAuthTokenInfo> {
-        self.oauth_tokens.get(provider_id)
-    }
-
     /// Set OAuth token for a provider
     pub fn set_oauth_token(&mut self, provider_id: &str, token: OAuthTokenInfo) {
         self.oauth_tokens.insert(provider_id.to_string(), token);
-    }
-
-    /// Remove OAuth token for a provider
-    pub fn remove_oauth_token(&mut self, provider_id: &str) {
-        self.oauth_tokens.remove(provider_id);
     }
 }
 
@@ -115,66 +87,9 @@ pub async fn save_api_key(provider_id: &str, api_key: &str) -> Result<()> {
     storage.save().await
 }
 
-/// Load an API key for a provider
-pub async fn load_api_key(provider_id: &str) -> Option<String> {
-    AuthStorage::load()
-        .await
-        .ok()
-        .and_then(|s| s.get_api_key(provider_id).cloned())
-}
-
-/// Remove an API key for a provider
-pub async fn remove_api_key(provider_id: &str) -> Result<()> {
-    let mut storage = AuthStorage::load().await.unwrap_or_default();
-    storage.remove_api_key(provider_id);
-    storage.save().await
-}
-
-/// Load all saved API keys into environment variables
-pub async fn load_saved_keys_to_env() -> Result<()> {
-    let storage = AuthStorage::load().await?;
-
-    // Map provider IDs to environment variable names
-    let env_map: HashMap<&str, &str> = [
-        ("anthropic", "ANTHROPIC_API_KEY"),
-        ("openai", "OPENAI_API_KEY"),
-        ("google", "GOOGLE_API_KEY"),
-        ("gemini", "GEMINI_API_KEY"),
-        ("copilot", "GITHUB_COPILOT_TOKEN"),
-    ]
-    .into_iter()
-    .collect();
-
-    for (provider_id, api_key) in &storage.api_keys {
-        if let Some(&env_var) = env_map.get(provider_id.as_str()) {
-            // Only set if not already set
-            if std::env::var(env_var).is_err() {
-                std::env::set_var(env_var, api_key);
-            }
-        }
-    }
-
-    Ok(())
-}
-
 /// Save OAuth token for a provider
 pub async fn save_oauth_token(provider_id: &str, token: OAuthTokenInfo) -> Result<()> {
     let mut storage = AuthStorage::load().await.unwrap_or_default();
     storage.set_oauth_token(provider_id, token);
-    storage.save().await
-}
-
-/// Load OAuth token for a provider
-pub async fn load_oauth_token(provider_id: &str) -> Option<OAuthTokenInfo> {
-    AuthStorage::load()
-        .await
-        .ok()
-        .and_then(|s| s.get_oauth_token(provider_id).cloned())
-}
-
-/// Remove OAuth token for a provider
-pub async fn remove_oauth_token(provider_id: &str) -> Result<()> {
-    let mut storage = AuthStorage::load().await.unwrap_or_default();
-    storage.remove_oauth_token(provider_id);
     storage.save().await
 }

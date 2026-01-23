@@ -11,7 +11,6 @@ pub enum IdPrefix {
     Session,
     Message,
     Part,
-    Project,
 }
 
 impl IdPrefix {
@@ -20,7 +19,6 @@ impl IdPrefix {
             IdPrefix::Session => "ses",
             IdPrefix::Message => "msg",
             IdPrefix::Part => "prt",
-            IdPrefix::Project => "prj",
         }
     }
 }
@@ -55,22 +53,6 @@ fn invert_ulid(ulid: &Ulid) -> String {
     ulid_inverted.to_string().to_lowercase()
 }
 
-/// Extract the timestamp from an ID
-pub fn timestamp(id: &str) -> Option<u64> {
-    let parts: Vec<&str> = id.split('_').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let ulid_str = parts[1].to_uppercase();
-    Ulid::from_string(&ulid_str).ok().map(|u| u.timestamp_ms())
-}
-
-/// Check if a string is a valid ID with the given prefix
-pub fn is_valid(id: &str, prefix: IdPrefix) -> bool {
-    id.starts_with(&format!("{}_", prefix.as_str())) && id.len() > prefix.as_str().len() + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,13 +77,5 @@ mod tests {
         assert!(id1.starts_with("ses_"));
         assert!(id2.starts_with("ses_"));
         assert!(id1 > id2); // IDs should be reverse chronologically ordered
-    }
-
-    #[test]
-    fn test_is_valid() {
-        let id = ascending(IdPrefix::Message);
-        assert!(is_valid(&id, IdPrefix::Message));
-        assert!(!is_valid(&id, IdPrefix::Session));
-        assert!(!is_valid("invalid", IdPrefix::Message));
     }
 }
